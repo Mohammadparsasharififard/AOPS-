@@ -1,0 +1,39 @@
+# =============================================================================
+# Docker Compose for Personal Server Manager
+# =============================================================================
+# This app runs on your LAPTOP (not your server). It exposes:
+#   - API on 127.0.0.1:7700 (FastAPI)
+#   - UI  on 127.0.0.1:3001 (Next.js)
+#
+# Both are bound to 127.0.0.1 — they are NOT reachable from outside your laptop.
+# Use this locally; do not deploy this to a remote server (it holds encrypted
+# SSH credentials for your servers).
+# =============================================================================
+
+services:
+  server-manager-api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    container_name: server-manager-api
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
+    ports:
+      - "127.0.0.1:7700:7700"
+    command: ["serve"]
+
+  server-manager-frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    container_name: server-manager-frontend
+    restart: unless-stopped
+    depends_on:
+      - server-manager-api
+    environment:
+      NEXT_PUBLIC_API_BASE: "http://127.0.0.1:7700"
+    ports:
+      - "127.0.0.1:3001:3001"

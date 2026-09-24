@@ -1,0 +1,47 @@
+[project]
+name = "server-manager"
+version = "1.0.0"
+description = "Personal Server Manager — laptop-side control panel for SSH-reachable servers (encrypted credentials, deploy, logs, service control)."
+requires-python = ">=3.11"
+license = { text = "MIT" }
+
+dependencies = [
+    "fastapi>=0.110.0",
+    "uvicorn[standard]>=0.27.0",
+    "sqlalchemy>=2.0.25",
+    "paramiko>=3.4.0",
+    "bcrypt>=4.1.2",
+    "pynacl>=1.5.0",
+    "click>=8.1.7",
+    "rich>=13.7.0",
+    "pydantic>=2.6.0",
+    "pydantic-settings>=2.1.0",
+    "python-dotenv>=1.0.1",
+    "python-multipart>=0.0.9",
+    "itsdangerous>=2.1.2",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "ruff>=0.3.0",
+]
+
+[project.scripts]
+server-manager = "cli.server_manager:cli"
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["api*", "cli*", "database*", "config*"]
+exclude = ["frontend*", "node_modules*", "data*"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM"]
+ignore = ["E501"]
