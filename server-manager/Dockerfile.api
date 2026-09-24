@@ -1,0 +1,42 @@
+# Server Manager API Dockerfile
+FROM python:3.11-slim AS base
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    libffi-dev \
+    libssl-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+RUN pip install --upgrade pip && \
+    pip install \
+      "fastapi>=0.110.0" \
+      "uvicorn[standard]>=0.27.0" \
+      "sqlalchemy>=2.0.25" \
+      "paramiko>=3.4.0" \
+      "bcrypt>=4.1.2" \
+      "pynacl>=1.5.0" \
+      "click>=8.1.7" \
+      "rich>=13.7.0" \
+      "pydantic>=2.6.0" \
+      "pydantic-settings>=2.1.0" \
+      "python-dotenv>=1.0.1" \
+      "python-multipart>=0.0.9" \
+      "itsdangerous>=2.1.2"
+
+COPY api/ ./api/
+COPY cli/  ./cli/
+COPY database/ ./database/
+COPY config.py ./
+
+ENV APP_HOST=0.0.0.0 \
+    APP_PORT=7700
+
+EXPOSE 7700
+
+CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "7700"]
