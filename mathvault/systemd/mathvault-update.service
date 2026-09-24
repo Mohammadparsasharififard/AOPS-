@@ -1,0 +1,41 @@
+[Unit]
+Description=MathVault incremental sync
+Wants=network-online.target
+After=network-online.target docker.service
+# Optional: also start only if API is up
+# After=mathvault-api.service
+
+[Service]
+Type=oneshot
+# Where MathVault is installed
+WorkingDirectory=/opt/mathvault
+# Use the venv from the project; replace path if installed elsewhere
+EnvironmentFile=/opt/mathvault/.env
+# Run sync via the CLI; respects SYNC_INTERVAL_HOURS from env on next run
+ExecStart=/opt/mathvault/.venv/bin/python -m cli.mathvault sync
+
+# Don't crash on transient network errors
+Restart=no
+# Timeout: sync should complete in 90 minutes max
+TimeoutStartSec=5400
+
+# Logging goes to journald
+StandardOutput=journal
+StandardError=journal
+
+# Security hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/opt/mathvault/data /opt/mathvault/archive /opt/mathvault/logs
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=no
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
