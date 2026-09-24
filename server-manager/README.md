@@ -92,6 +92,31 @@ scripts\setup.bat
 python scripts/setup.py
 ```
 
+### 1b. (Optional) Pre-seed your servers
+
+If you have a fixed list of personal servers with their SSH credentials, you
+can register them all at once via a JSON file instead of typing them through
+the UI.
+
+1. Copy the example file:
+   - Windows: `copy scripts\servers.local.json.example scripts\servers.local.json`
+   - macOS/Linux: `cp scripts/servers.local.json.example scripts/servers.local.json`
+2. Edit `scripts/servers.local.json` with your server's name, host, username,
+   password, and notes (see the example file for the schema).
+3. Run the seed script (will ask for your master password to encrypt the
+   credentials):
+   ```
+   python scripts/seed-servers.py
+   ```
+
+**Security**: `servers.local.json` is gitignored — it will never be committed
+to GitHub. The plaintext password is read once, encrypted with the master
+password (sealed box), and inserted into the local DB. The plaintext is
+discarded immediately.
+
+You can re-run the seed script any time — it will **update** existing servers
+by name (so changing a password is as simple as editing the JSON and re-running).
+
 ### 2. Start the app
 
 **Windows (PowerShell):**

@@ -28,6 +28,9 @@ env/
 .env.local
 .env.*.local
 
+# Server Manager — local seed file (contains plaintext SSH passwords)
+server-manager/scripts/servers.local.json
+
 # Database
 *.db
 *.db-journal
