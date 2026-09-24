@@ -169,6 +169,8 @@ class Storage:
                 byte_size=len(content_bytes) if content_bytes else len(content_text or ""),
             )
             self.db.add(new_version)
+            # Flush so the new version is visible to subsequent queries
+            self.db.flush()
 
         self._write_page_file(page, content_html if is_complete else "", status)
         return page, status
@@ -454,16 +456,23 @@ class Storage:
         except Exception:
             return None
         for sig in self.BLOCKED_BODY_SIGNATURES:
-            if sig in text:
-                # Pick the most specific reason
-                if "captcha" in sig or "robot" in sig or "human" in sig:
-                    return ("captcha", f"Body signature: '{sig}'")
-                if "log in" in sig or "sign in" in sig:
-                    return ("login_required", f"Body signature: '{sig}'")
-                if "subscribe" in sig or "paywall" in sig:
-                    return ("paywall", f"Body signature: '{sig}'")
-                if "access denied" in sig:
-                    return ("access_denied", f"Body signature: '{sig}'")
+            if sig not in text:
+                continue
+            # Determine reason from the matching signature
+            if "captcha" in sig:
+                return ("captcha", f"Body signature: '{sig}'")
+            if "robot" in sig or "human" in sig or "verify" in sig:
+                # "are you a robot", "are you human", "please verify you are",
+                # "human verification" → treat as captcha-like challenge
+                return ("captcha", f"Body signature: '{sig}'")
+            if "log in" in sig or "sign in" in sig:
+                return ("login_required", f"Body signature: '{sig}'")
+            if "subscribe" in sig or "paywall" in sig:
+                return ("paywall", f"Body signature: '{sig}'")
+            if "access denied" in sig:
+                return ("access_denied", f"Body signature: '{sig}'")
+            # Fallback — unknown signature but still indicates a block
+            return ("unknown_block", f"Body signature: '{sig}'")
         return None
 
     def record_blocked_url(
@@ -507,3 +516,6 @@ class Storage:
                 existing.detail = detail
             if http_status is not None:
                 existing.http_status = http_status
+        # Flush so the row is visible in subsequent queries within the same
+        # session (without forcing a commit — the caller controls that).
+        self.db.flush()
