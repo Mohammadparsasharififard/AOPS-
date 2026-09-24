@@ -432,12 +432,35 @@ class Storage:
         "subscribe to continue",
         "paywall",
         "access denied",
+        # Cloudflare challenge markers
+        "just a moment",
+        "_cf_chl_opt",
+        "cdn-cgi/challenge-platform",
+        "challenges.cloudflare.com",
     )
 
     def detect_block_reason(self, status_code: int, body: bytes, content_type: Optional[str]) -> Optional[tuple[str, str]]:
         """Inspect a response and return (reason, detail) if it looks blocked,
         otherwise None.
         """
+        # Body heuristic — only for HTML. Check FIRST so that Cloudflare
+        # challenge (which returns 403 with a specific body) is correctly
+        # detected as 'cloudflare_challenge' rather than generic 'access_denied'.
+        if content_type and "html" in content_type.lower() and body:
+            try:
+                text = body.decode("utf-8", errors="replace").lower()[:50000]
+
+                # Cloudflare challenge — detect FIRST (most specific)
+                if "just a moment" in text and ("_cf_chl_opt" in text or "cdn-cgi/challenge-platform" in text):
+                    return ("cloudflare_challenge", "Cloudflare managed challenge (HTTP 403 + JS challenge page)")
+                if "_cf_chl_opt" in text or "cf_chl_rc" in text:
+                    return ("cloudflare_challenge", "Cloudflare challenge signature in body")
+                if "enable javascript and cookies to continue" in text and "challenges.cloudflare.com" in text:
+                    return ("cloudflare_challenge", "Cloudflare JS challenge requirement")
+            except Exception:
+                pass
+
+        # Now check status codes
         if status_code in self.BLOCKED_HTTP_STATUSES:
             reason_map = {
                 401: "login_required",
@@ -446,7 +469,7 @@ class Storage:
             }
             return (reason_map[status_code], f"HTTP {status_code}")
 
-        # Body heuristic — only for HTML
+        # Body heuristic for non-403 status (e.g. HTTP 200 with captcha body)
         if not content_type or "html" not in content_type.lower():
             return None
         if not body:
@@ -455,6 +478,7 @@ class Storage:
             text = body.decode("utf-8", errors="replace").lower()[:50000]
         except Exception:
             return None
+
         for sig in self.BLOCKED_BODY_SIGNATURES:
             if sig not in text:
                 continue
@@ -462,8 +486,6 @@ class Storage:
             if "captcha" in sig:
                 return ("captcha", f"Body signature: '{sig}'")
             if "robot" in sig or "human" in sig or "verify" in sig:
-                # "are you a robot", "are you human", "please verify you are",
-                # "human verification" → treat as captcha-like challenge
                 return ("captcha", f"Body signature: '{sig}'")
             if "log in" in sig or "sign in" in sig:
                 return ("login_required", f"Body signature: '{sig}'")
@@ -471,7 +493,9 @@ class Storage:
                 return ("paywall", f"Body signature: '{sig}'")
             if "access denied" in sig:
                 return ("access_denied", f"Body signature: '{sig}'")
-            # Fallback — unknown signature but still indicates a block
+            # Cloudflare signatures (caught above, but just in case)
+            if "just a moment" in sig or "cf_chl" in sig or "cdn-cgi" in sig:
+                return ("cloudflare_challenge", f"Body signature: '{sig}'")
             return ("unknown_block", f"Body signature: '{sig}'")
         return None
 

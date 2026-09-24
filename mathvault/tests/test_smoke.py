@@ -353,6 +353,62 @@ def test_offline_link_rewriting():
         assert f"/api/assets/{asset.id}" in content, "Image src not rewritten"
 
 
+def test_cloudflare_challenge_detection():
+    """Cloudflare managed challenge (e.g. AoPS) is correctly detected and
+    recorded as 'cloudflare_challenge' — NEVER bypassed.
+
+    Real AoPS pages return HTTP 403 with the Cloudflare interstitial
+    ('Just a moment...' + _cf_chl_opt). MathVault must detect this and
+    record it as a block, not store the challenge page as content.
+    """
+    _reset_mathvault_modules()
+    import database.session
+    import crawler.storage
+    import database.models
+    from sqlalchemy import select
+
+    # Real AoPS Cloudflare challenge HTML (truncated for test)
+    cf_html = b"""<!DOCTYPE html><html lang="en-US"><head><title>Just a moment...</title>
+<meta name="robots" content="noindex,nofollow">
+<noscript>Enable JavaScript and cookies to continue</noscript>
+<script nonce="x">window._cf_chl_opt = {cType: 'managed'};
+var a = document.createElement('script');
+a.src = '/cdn-cgi/challenge-platform/h/b/orchestrate/chl_page/v1?ray=xyz';
+</script></head><body></body></html>"""
+
+    with database.session.session_scope() as db:
+        storage = crawler.storage.Storage(db)
+
+        # Detect Cloudflare challenge
+        result = storage.detect_block_reason(403, cf_html, "text/html")
+        assert result is not None, "Cloudflare challenge must be detected"
+        assert result[0] == "cloudflare_challenge", f"Got: {result[0]}"
+
+        # Record as blocked URL
+        storage.record_blocked_url(
+            url="https://artofproblemsolving.com/wiki/index.php/Main_Page",
+            reason="cloudflare_challenge",
+            detail=result[1],
+            http_status=403,
+        )
+        db.commit()
+
+        # Verify
+        blocked = db.execute(
+            select(database.models.BlockedUrl).where(
+                database.models.BlockedUrl.url == "https://artofproblemsolving.com/wiki/index.php/Main_Page"
+            )
+        ).scalar_one_or_none()
+        assert blocked is not None, "Blocked URL must be recorded"
+        assert blocked.reason == "cloudflare_challenge"
+        assert blocked.http_status == 403
+
+    # The challenge page MUST NOT be stored as page content (no bypass)
+    # If we tried to upsert_page with this body, the scheduler would have
+    # already returned early (block_reason detected BEFORE storing).
+    # The crawler's _process_one() checks this before calling upsert_page.
+
+
 if __name__ == "__main__":
     setup_module()
     tests = [
@@ -362,6 +418,7 @@ if __name__ == "__main__":
         test_test14_search_offline,
         test_test_15_backup_restore_scripts_exist,
         test_offline_link_rewriting,
+        test_cloudflare_challenge_detection,
     ]
     passed = 0
     failed = 0
