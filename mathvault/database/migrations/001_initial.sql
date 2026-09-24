@@ -175,6 +175,7 @@ CREATE TABLE IF NOT EXISTS crawl_run (
     pages_changed     INTEGER NOT NULL DEFAULT 0,
     pages_unchanged   INTEGER NOT NULL DEFAULT 0,
     pages_failed      INTEGER NOT NULL DEFAULT 0,
+    pages_blocked     INTEGER NOT NULL DEFAULT 0,
     bytes_downloaded  INTEGER NOT NULL DEFAULT 0,
     error_message     TEXT,
     dry_run           BOOLEAN NOT NULL DEFAULT FALSE
@@ -193,6 +194,26 @@ CREATE TABLE IF NOT EXISTS crawl_error (
     retry_count    INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS ix_crawl_error_run ON crawl_error (crawl_run_id);
+
+-- Blocked URLs — access-control mechanisms encountered during crawl.
+-- NEVER bypassed; recorded so the crawler can continue and the user can see
+-- what wasn't archived and why.
+CREATE TABLE IF NOT EXISTS blocked_url (
+    id                  VARCHAR(32) PRIMARY KEY,
+    url                 TEXT NOT NULL UNIQUE,
+    canonical_url       TEXT NOT NULL,
+    reason              VARCHAR(50) NOT NULL,
+    detail              TEXT,
+    http_status         INTEGER,
+    first_detected      TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    last_attempted      TIMESTAMP WITH TIME ZONE,
+    retry_count         INTEGER NOT NULL DEFAULT 0,
+    last_crawl_run_id   VARCHAR(32) REFERENCES crawl_run(id) ON DELETE SET NULL
+);
+CREATE INDEX IF NOT EXISTS ix_blocked_url_url      ON blocked_url (url);
+CREATE INDEX IF NOT EXISTS ix_blocked_url_canon   ON blocked_url (canonical_url);
+CREATE INDEX IF NOT EXISTS ix_blocked_url_reason  ON blocked_url (reason);
+CREATE INDEX IF NOT EXISTS ix_blocked_url_first   ON blocked_url (first_detected);
 
 -- Search index ----------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS search_doc (

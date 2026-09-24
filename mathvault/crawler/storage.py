@@ -5,6 +5,8 @@ This module bridges the crawler and the database. It guarantees:
 2. Incomplete downloads do not destroy existing versions.
 3. Filesystem paths are always SHA-256-based (no user input).
 4. Search index is updated incrementally.
+5. Blocked URLs (CAPTCHA / login / paywall / robots / 401 / 403 / 429) are
+   recorded so the crawler can continue without bypassing them.
 """
 from __future__ import annotations
 
@@ -27,6 +29,7 @@ from crawler.normalizer import (
 from database.models import (
     ArchiveStatus,
     Asset,
+    BlockedUrl,
     CrawlRun,
     Page,
     PageVersion,
@@ -166,6 +169,8 @@ class Storage:
                 byte_size=len(content_bytes) if content_bytes else len(content_text or ""),
             )
             self.db.add(new_version)
+            # Flush so the new version is visible to subsequent queries
+            self.db.flush()
 
         self._write_page_file(page, content_html if is_complete else "", status)
         return page, status
@@ -182,7 +187,9 @@ class Storage:
     def _write_page_file(self, page: Page, html: str, status: str) -> None:
         """Write the page's current HTML snapshot to disk.
 
-        Only write if complete — preserves previous version on failure.
+        Rewrites internal links to local API paths so the snapshot is fully
+        usable offline. Only writes if complete — preserves previous version
+        on failure.
         """
         if status not in ("new", "changed"):
             return
@@ -193,12 +200,95 @@ class Storage:
         page_dir = self.settings.archive_path / "pages" / rel.split("/")[0] / rel.split("/")[1]
         page_dir.mkdir(parents=True, exist_ok=True)
         file_path = page_dir / rel.split("/")[-1]
-        # Write current version (atomically — write to .tmp then rename)
+
+        # Offline link rewriting — rewrite internal <a href> and <img src>
+        # so the archived snapshot is browsable offline.
+        rewritten = self._rewrite_links_for_offline(html, page.canonical_url)
+
+        # Atomic write (write to .tmp then rename)
         tmp = file_path.with_suffix(".html.tmp")
-        tmp.write_text(html, encoding="utf-8")
+        tmp.write_text(rewritten, encoding="utf-8")
         tmp.replace(file_path.with_suffix(".html"))
-        # Page.archive_path is the relative dir
         page.archive_path = rel
+
+    def _rewrite_links_for_offline(self, html: str, source_canonical: str) -> str:
+        """Rewrite internal links in archived HTML to local API paths.
+
+        - For each <a href> that points to an internal URL we have archived:
+          rewrite to /api/pages/{page_id} (the local snapshot)
+        - For each <a href> that points to an internal URL we have NOT archived:
+          rewrite to a "not available offline" placeholder
+        - For <img src>: rewrite to /api/assets/{asset_id} (local asset)
+        - External links: leave untouched (they will require internet)
+        - Hash-only links (#section): leave untouched
+        """
+        try:
+            from bs4 import BeautifulSoup
+            from urllib.parse import urljoin, urlparse
+
+            soup = BeautifulSoup(html, "lxml")
+
+            # Build a map of canonical_url → page_id for all known pages
+            # (single round-trip; can be slow for huge archives)
+            # Limit to reasonable size to avoid OOM on small server
+            pages_map: dict[str, str] = {}
+            try:
+                rows = self.db.execute(
+                    select(Page.id, Page.canonical_url).limit(10000)
+                ).all()
+                pages_map = {canon: pid for pid, canon in rows}
+            except Exception:
+                pass
+
+            # Rewrite <a href>
+            for a in soup.find_all("a", href=True):
+                href = a["href"].strip()
+                if not href or href.startswith("#") or href.startswith("mailto:") or href.startswith("javascript:"):
+                    continue
+                if href.startswith("data:"):
+                    continue
+                absolute = urljoin(source_canonical, href)
+                # Strip fragment
+                if "#" in absolute:
+                    absolute_no_frag = absolute.split("#", 1)[0]
+                else:
+                    absolute_no_frag = absolute
+                # Try canonical lookup
+                from crawler.normalizer import canonicalize_url
+                canon = canonicalize_url(absolute_no_frag)
+                page_id = pages_map.get(canon)
+                if page_id:
+                    a["href"] = f"/api/pages/{page_id}"
+                    if "#" in absolute:
+                        a["href"] += "#" + absolute.split("#", 1)[1]
+                else:
+                    # Internal (same host as source) but not archived → flag
+                    source_host = (urlparse(source_canonical).hostname or "").lower()
+                    target_host = (urlparse(absolute).hostname or "").lower()
+                    if target_host == source_host and target_host:
+                        # Mark as not-archived — keep href but add data-mv attribute
+                        a["data-mv-status"] = "not-archived"
+                        # Leave href as-is so user sees the external URL when clicked
+
+            # Rewrite <img src>
+            for img in soup.find_all("img", src=True):
+                src = img["src"].strip()
+                if not src or src.startswith("data:"):
+                    continue
+                absolute = urljoin(source_canonical, src)
+                # Find local asset
+                from database.models import Asset
+                asset = self.db.execute(
+                    select(Asset).where(Asset.asset_url == absolute)
+                ).scalar_one_or_none()
+                if asset and asset.local_path:
+                    img["src"] = f"/api/assets/{asset.id}"
+                # If asset not found, leave src — it will require internet
+
+            return str(soup)
+        except Exception as e:
+            logger.warning("Link rewriting failed: %s — using original HTML", e)
+            return html
 
     # --- Assets ------------------------------------------------------------
 
@@ -321,3 +411,111 @@ class Storage:
         self.db.execute(
             update(CrawlRun).where(CrawlRun.id == crawl_run_id).values(**stats)
         )
+
+    # --- Blocked URLs ------------------------------------------------------
+
+    # HTTP status codes that indicate access-control rather than transient
+    # failure. We do NOT bypass these — we record them and continue.
+    BLOCKED_HTTP_STATUSES = {401, 403, 429}
+
+    # Substrings in HTML body that indicate CAPTCHA / login / paywall.
+    # Used as heuristic detection only — never to bypass.
+    BLOCKED_BODY_SIGNATURES = (
+        "captcha",
+        "are you a robot",
+        "are you human",
+        "please verify you are",
+        "human verification",
+        "sign in to continue",
+        "log in to continue",
+        "please log in",
+        "subscribe to continue",
+        "paywall",
+        "access denied",
+    )
+
+    def detect_block_reason(self, status_code: int, body: bytes, content_type: Optional[str]) -> Optional[tuple[str, str]]:
+        """Inspect a response and return (reason, detail) if it looks blocked,
+        otherwise None.
+        """
+        if status_code in self.BLOCKED_HTTP_STATUSES:
+            reason_map = {
+                401: "login_required",
+                403: "access_denied",
+                429: "rate_limited",
+            }
+            return (reason_map[status_code], f"HTTP {status_code}")
+
+        # Body heuristic — only for HTML
+        if not content_type or "html" not in content_type.lower():
+            return None
+        if not body:
+            return None
+        try:
+            text = body.decode("utf-8", errors="replace").lower()[:50000]
+        except Exception:
+            return None
+        for sig in self.BLOCKED_BODY_SIGNATURES:
+            if sig not in text:
+                continue
+            # Determine reason from the matching signature
+            if "captcha" in sig:
+                return ("captcha", f"Body signature: '{sig}'")
+            if "robot" in sig or "human" in sig or "verify" in sig:
+                # "are you a robot", "are you human", "please verify you are",
+                # "human verification" → treat as captcha-like challenge
+                return ("captcha", f"Body signature: '{sig}'")
+            if "log in" in sig or "sign in" in sig:
+                return ("login_required", f"Body signature: '{sig}'")
+            if "subscribe" in sig or "paywall" in sig:
+                return ("paywall", f"Body signature: '{sig}'")
+            if "access denied" in sig:
+                return ("access_denied", f"Body signature: '{sig}'")
+            # Fallback — unknown signature but still indicates a block
+            return ("unknown_block", f"Body signature: '{sig}'")
+        return None
+
+    def record_blocked_url(
+        self,
+        url: str,
+        reason: str,
+        detail: Optional[str] = None,
+        http_status: Optional[int] = None,
+        crawl_run_id: Optional[str] = None,
+    ) -> None:
+        """Insert or update a BlockedUrl row.
+
+        The crawler calls this when it encounters an access-control mechanism
+        (CAPTCHA, login wall, paywall, robots, 401, 403, 429). The URL is
+        recorded and the crawl continues. The URL is NEVER bypassed.
+        """
+        canon = canonicalize_url(url)
+        existing = self.db.execute(
+            select(BlockedUrl).where(BlockedUrl.url == canon)
+        ).scalar_one_or_none()
+        now = datetime.now(timezone.utc)
+        if existing is None:
+            self.db.add(BlockedUrl(
+                url=canon,
+                canonical_url=canon,
+                reason=reason,
+                detail=detail,
+                http_status=http_status,
+                first_detected=now,
+                last_attempted=now,
+                retry_count=1,
+                last_crawl_run_id=crawl_run_id,
+            ))
+        else:
+            existing.last_attempted = now
+            existing.retry_count += 1
+            existing.last_crawl_run_id = crawl_run_id
+            # Update reason/detail only if the new one is more specific
+            if reason and detail:
+                existing.reason = reason
+                existing.detail = detail
+            if http_status is not None:
+                existing.http_status = http_status
+        # Flush so the row is visible in subsequent queries within the same
+        # session (without forcing a commit — the caller controls that).
+        self.db.flush()

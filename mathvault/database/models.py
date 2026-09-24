@@ -376,6 +376,7 @@ class CrawlRun(Base):
     pages_changed: Mapped[int] = mapped_column(Integer, default=0)
     pages_unchanged: Mapped[int] = mapped_column(Integer, default=0)
     pages_failed: Mapped[int] = mapped_column(Integer, default=0)
+    pages_blocked: Mapped[int] = mapped_column(Integer, default=0)
     bytes_downloaded: Mapped[int] = mapped_column(Integer, default=0)
     error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     dry_run: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -399,6 +400,45 @@ class CrawlError(Base):
     retry_count: Mapped[int] = mapped_column(Integer, default=0)
 
     crawl_run: Mapped["CrawlRun"] = relationship(back_populates="errors")
+
+
+class BlockedUrl(Base):
+    """URLs the crawler refused to fetch because they triggered an access
+    control (CAPTCHA / login / paywall / robots / rate-limit / 403 / 429).
+
+    These are NEVER bypassed — they are recorded and the crawler continues.
+
+    Reasons:
+    - captcha
+    - login_required
+    - paywall
+    - robots_disallow
+    - access_denied (HTTP 401, 403)
+    - rate_limited (HTTP 429)
+    - forbidden (HTTP 403)
+    - server_error (HTTP 5xx — also recorded as failure, not blocked)
+    """
+    __tablename__ = "blocked_url"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_uuid)
+    url: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    canonical_url: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(String(50), nullable=False)
+    detail: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    http_status: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    first_detected: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    last_attempted: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    retry_count: Mapped[int] = mapped_column(Integer, default=0)
+    last_crawl_run_id: Mapped[Optional[str]] = mapped_column(
+        ForeignKey("crawl_run.id", ondelete="SET NULL"), nullable=True
+    )
+
+    __table_args__ = (
+        Index("ix_blocked_url_url", "url"),
+        Index("ix_blocked_url_canonical_url", "canonical_url"),
+        Index("ix_blocked_url_reason", "reason"),
+        Index("ix_blocked_url_first_detected", "first_detected"),
+    )
 
 
 # =============================================================================
