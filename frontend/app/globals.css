@@ -1,0 +1,56 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html {
+  scroll-behavior: smooth;
+}
+
+/* KaTeX rendering */
+.katex-display {
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 0.5em 0;
+}
+
+/* Sidebar collapse on mobile */
+@media (max-width: 768px) {
+  .sidebar {
+    position: fixed;
+    left: -100%;
+    transition: left 0.2s ease;
+    z-index: 50;
+  }
+  .sidebar.open {
+    left: 0;
+  }
+}
+
+/* Problem statement typography */
+.prose-math {
+  line-height: 1.7;
+}
+.prose-math p {
+  margin-bottom: 1em;
+}
+.prose-math ul, .prose-math ol {
+  margin-left: 1.5em;
+  margin-bottom: 1em;
+}
+.prose-math img {
+  max-width: 100%;
+  height: auto;
+  margin: 1em 0;
+}
+.prose-math table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 1em 0;
+}
+.prose-math table td, .prose-math table th {
+  border: 1px solid #cbd5e1;
+  padding: 0.5em 0.75em;
+}
+.dark .prose-math table td, .dark .prose-math table th {
+  border-color: #475569;
+}
