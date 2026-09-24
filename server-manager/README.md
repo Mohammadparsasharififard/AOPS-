@@ -27,21 +27,38 @@ and access the offline archive — all from a single web UI.
 
 ## Quick start
 
-```bash
-git clone <repo> server-manager
-cd server-manager
+### On Windows
 
-# First-run setup (creates venv, installs deps, sets master password)
-./scripts/setup.sh
+```powershell
+# First-run setup (PowerShell — no bash required)
+.\scripts\setup.ps1
+# or just double-click scripts\setup.bat
 
 # Start the app
-./scripts/start.sh
+.\scripts\start.ps1
+# or double-click scripts\start.bat
 
 # Open in browser:
 #   http://127.0.0.1:3001
 ```
 
-Or with Docker Compose:
+**Requirements**: Python 3.11+ from https://python.org (check "Add Python to PATH" during install).
+
+### On macOS / Linux
+
+```bash
+./scripts/setup.sh
+./scripts/start.sh
+```
+
+Or the cross-platform Python script (works everywhere):
+
+```bash
+python scripts/setup.py
+python scripts/start.py
+```
+
+### With Docker Compose
 
 ```bash
 cp .env.example .env
@@ -55,16 +72,46 @@ docker compose up -d
 
 ### 1. Set master password (first run only)
 
+**Windows (PowerShell):**
+```powershell
+.\scripts\setup.ps1
+```
+
+**Windows (CMD):**
+```cmd
+scripts\setup.bat
+```
+
+**macOS / Linux:**
 ```bash
 ./scripts/setup.sh
-# or manually:
-python -m cli.server_manager setup
+```
+
+**Cross-platform:**
+```bash
+python scripts/setup.py
 ```
 
 ### 2. Start the app
 
+**Windows (PowerShell):**
+```powershell
+.\scripts\start.ps1
+```
+
+**Windows (CMD):**
+```cmd
+scripts\start.bat
+```
+
+**macOS / Linux:**
 ```bash
 ./scripts/start.sh
+```
+
+**Cross-platform:**
+```bash
+python scripts/start.py
 ```
 
 ### 3. Sign in
@@ -167,12 +214,26 @@ access controls.
 
 ## Troubleshooting
 
+### "The system cannot find the path specified" (Windows + bash)
+You probably ran `setup.sh` from a bash emulator on Windows (Git Bash / VSCode bash).
+Use the Windows-native scripts instead:
+- PowerShell: `.\scripts\setup.ps1`
+- CMD: `scripts\setup.bat`
+- Or universal: `python scripts\setup.py`
+
+### "python is not recognized" (Windows)
+Python is not installed or not on PATH. Install Python 3.11+ from https://python.org
+— during install, **check "Add Python to PATH"**. Then close and reopen your terminal.
+
 ### "Master password not set"
-Run `./scripts/setup.sh` (or `python -m cli.server_manager setup`).
+- Windows: `.\scripts\setup.ps1`
+- macOS/Linux: `./scripts/setup.sh`
+- Cross-platform: `python scripts/setup.py`
 
 ### "Failed to decrypt password — wrong master password?"
 Either the master password you entered at login is wrong, or the keypair file
-(`data/keypair.json`) is corrupted. Re-run setup after deleting `data/`.
+(`data/keypair.json`) is corrupted. Re-run setup after deleting the `data/`
+directory.
 
 ### "Connection refused" when testing server
 - Verify the server is reachable: `ssh user@host` from your laptop
