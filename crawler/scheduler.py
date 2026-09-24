@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Optional
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from config import get_settings
@@ -27,7 +27,7 @@ from crawler.fetcher import AllowList, Fetcher, build_allowlist
 from crawler.normalizer import canonicalize_url, is_url_allowed_scheme
 from crawler.parser import is_html_content_type, parse_html
 from crawler.storage import Storage
-from database.models import CrawlError, CrawlRun, CrawlRunStatus, Page
+from database.models import BlockedUrl, CrawlError, CrawlRun, CrawlRunStatus, Page
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +39,7 @@ class CrawlStats:
     pages_changed: int = 0
     pages_unchanged: int = 0
     pages_failed: int = 0
+    pages_blocked: int = 0
     bytes_downloaded: int = 0
     started_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     finished_at: Optional[datetime] = None
@@ -139,6 +140,12 @@ class CrawlScheduler:
         if result is None:
             self.stats.pages_failed += 1
             self._record_error(url, "preflight_rejected", "URL rejected by allowlist/robots")
+            # Robots-disallowed URLs are recorded as blocked too
+            storage.record_blocked_url(
+                url=url, reason="robots_disallow",
+                detail="URL disallowed by robots.txt or allowlist",
+                crawl_run_id=self.crawl_run_id,
+            )
             return
         if result.error:
             self.stats.pages_failed += 1
@@ -149,6 +156,16 @@ class CrawlScheduler:
             self._update_progress(pages_unchanged=self.stats.pages_unchanged)
             return
         if result.status_code >= 400:
+            # 401/403/429 → blocked (access control), not just failed
+            block_reason = storage.detect_block_reason(result.status_code, b"", None)
+            if block_reason is not None:
+                reason, detail = block_reason
+                storage.record_blocked_url(
+                    url=url, reason=reason, detail=detail,
+                    http_status=result.status_code, crawl_run_id=self.crawl_run_id,
+                )
+                # Don't count as "failed" — it's blocked (intentional, not error)
+                return
             self.stats.pages_failed += 1
             self._record_error(
                 url, f"http_{result.status_code}",
@@ -156,6 +173,22 @@ class CrawlScheduler:
                 http_status=result.status_code,
             )
             return
+
+        # Body heuristic — check if HTML body has CAPTCHA/login/paywall signatures
+        # BEFORE storing. This is the user's explicit requirement: NEVER bypass
+        # these. We detect, record as BLOCKED, and continue without storing.
+        if is_html_content_type(result.content_type):
+            block_reason = storage.detect_block_reason(
+                result.status_code, result.content, result.content_type
+            )
+            if block_reason is not None:
+                reason, detail = block_reason
+                storage.record_blocked_url(
+                    url=url, reason=reason, detail=detail,
+                    http_status=result.status_code, crawl_run_id=self.crawl_run_id,
+                )
+                logger.info("Blocked URL detected (%s): %s", reason, url)
+                return  # Do NOT store — content is access-protected
 
         self.stats.bytes_downloaded += len(result.content)
 
@@ -269,6 +302,7 @@ class CrawlScheduler:
             pages_changed=self.stats.pages_changed,
             pages_unchanged=self.stats.pages_unchanged,
             pages_failed=self.stats.pages_failed,
+            pages_blocked=self.stats.pages_blocked,
             bytes_downloaded=self.stats.bytes_downloaded,
         )
 
@@ -276,6 +310,14 @@ class CrawlScheduler:
         if self.crawl_run_id is None:
             return
         from sqlalchemy import update
+        # Compute total blocked count from DB (more accurate than self.stats,
+        # since blocked URLs are recorded inline by storage.record_blocked_url)
+        blocked_count = self.db.execute(
+            select(func.count(BlockedUrl.id)).where(
+                BlockedUrl.last_crawl_run_id == self.crawl_run_id
+            )
+        ).scalar() or 0
+        self.stats.pages_blocked = blocked_count
         self.db.execute(
             update(CrawlRun).where(CrawlRun.id == self.crawl_run_id).values(
                 finished_at=datetime.now(timezone.utc),
@@ -285,6 +327,7 @@ class CrawlScheduler:
                 pages_changed=self.stats.pages_changed,
                 pages_unchanged=self.stats.pages_unchanged,
                 pages_failed=self.stats.pages_failed,
+                pages_blocked=blocked_count,
                 bytes_downloaded=self.stats.bytes_downloaded,
             )
         )
