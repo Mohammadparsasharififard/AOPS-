@@ -1,0 +1,11 @@
+[
+  {
+    "name": "my-server",
+    "host": "192.168.1.150",
+    "port": 22,
+    "username": "mp",
+    "auth_method": "password",
+    "password": "Mp13911391!",
+    "notes": "Personal Ubuntu server on local network"
+  }
+]
