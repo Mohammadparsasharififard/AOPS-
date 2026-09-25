@@ -43,13 +43,13 @@ def create_app() -> FastAPI:
         title="Personal Server Manager",
         version="1.0.0",
         description="Laptop-side control panel for SSH-reachable personal servers.",
-        docs_url="/api/docs" if settings.app_debug else None,
+        docs_url="/api/docs" if settings.app_debug else "/api/docs",
     )
 
-    # CORS — only same-origin (the Next.js frontend uses /api proxy)
+    # CORS
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["http://localhost:3001", "http://127.0.0.1:3001"],
+        allow_origins=["*"],
         allow_credentials=True,
         allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
         allow_headers=["*"],
@@ -59,6 +59,21 @@ def create_app() -> FastAPI:
     app.include_router(routes.servers.router, prefix="/api/servers", tags=["servers"])
     app.include_router(routes.audit.router, prefix="/api/audit", tags=["audit"])
     app.include_router(routes.archive.router, prefix="/api/archive", tags=["archive"])
+
+    # Serve the built-in web UI at /
+    from fastapi.responses import HTMLResponse, FileResponse
+    from pathlib import Path
+
+    @app.get("/", response_class=HTMLResponse)
+    async def web_ui():
+        ui_path = Path(__file__).parent.parent / "static" / "index.html"
+        if ui_path.exists():
+            return HTMLResponse(ui_path.read_text(encoding="utf-8"))
+        return HTMLResponse("<h1>MathVault API</h1><p>Web UI not found. Visit /api/docs</p>")
+
+    @app.get("/api/health")
+    async def health():
+        return {"status": "ok", "version": "1.0.0"}
 
     @app.exception_handler(401)
     async def _401(_: Request, exc: HTTPException):
