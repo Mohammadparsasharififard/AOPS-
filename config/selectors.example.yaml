@@ -1,0 +1,97 @@
+# Selector configuration for MathVault crawler.
+#
+# These selectors are used by the parser to extract semantic structure from
+# arbitrary HTML pages. They are domain-agnostic by default — override per
+# source by editing this file.
+#
+# Format: CSS selectors (lxml-compatible).
+
+# Where to look for the main content area on a page.
+# The crawler tries these in order; the first match wins.
+content_selectors:
+  - "main"
+  - "article"
+  - "#content"
+  - ".content"
+  - "#main"
+  - ".main"
+  - "#primary"
+  - "body"
+
+# Where to look for navigation (sidebar / menu) links.
+navigation_selectors:
+  - "nav"
+  - "aside"
+  - ".sidebar"
+  - ".menu"
+
+# Breadcrumb container — used to extract country/region hierarchy.
+breadcrumb_selectors:
+  - ".breadcrumb"
+  - "nav.breadcrumb"
+  - ".breadcrumbs"
+
+# Discussion thread container.
+discussion_selectors:
+  - ".discussion"
+  - ".thread"
+  - ".comments"
+  - "#comments"
+  - ".forum-thread"
+
+# Per-post selector (within a discussion).
+post_selectors:
+  - ".post"
+  - ".comment"
+  - ".forum-post"
+
+# Pagination — links to "next page" within a discussion.
+pagination_next_selectors:
+  - "a.next"
+  - 'a[rel="next"]'
+  - ".pagination a:last-child"
+
+# Contest listing — each contest in a list page.
+contest_item_selectors:
+  - ".contest-item"
+  - "li.contest"
+  - ".archive-item"
+
+# Year listing — usually <a> within contest detail page.
+year_pattern:
+  - "a[href*='/year/']"
+  - "a[href*='/20']"
+
+# Problem listing within a year.
+problem_item_selectors:
+  - ".problem"
+  - ".problem-item"
+  - "a[href*='/problem']"
+
+# Resource pack / problem set download links.
+resource_selectors:
+  - "a[href$='.pdf']"
+  - "a[href$='.zip']"
+  - "a[href$='.tex']"
+
+# Tag patterns — regex applied to problem statements.
+tag_patterns:
+  - "(?:\\balgebra\\b)"
+  - "(?:\\bgeometry\\b)"
+  - "(?:\\bnumber theory\\b)"
+  - "(?:\\bcombinatorics\\b)"
+  - "(?:\\binequalit(?:y|ies)\\b)"
+  - "(?:\\bcalculus\\b)"
+  - "(?:\\btrigonometry\\b)"
+  - "(?:\\bpolynomial(?:s)?\\b)"
+  - "(?:\\bsequence(?:s)?\\b)"
+  - "(?:\\bprobabilit(?:y|ies)\\b)"
+
+# Difficulty hints — string match on problem statements.
+difficulty_hints:
+  - name: "Easy"
+    pattern: "(?:^|\\s)easy(?:\\s|$)"
+  - name: "Medium"
+    pattern: "(?:^|\\s)medium(?:\\s|$)"
+  - name: "Hard"
+    pattern: "(?:^|\\s)hard(?:\\s|$)"

@@ -27,6 +27,7 @@ and access the offline archive — all from a single web UI.
 
 ## Quick start
 
+<<<<<<< HEAD
 ```bash
 git clone <repo> server-manager
 cd server-manager
@@ -36,12 +37,44 @@ cd server-manager
 
 # Start the app
 ./scripts/start.sh
+=======
+### On Windows
+
+```powershell
+# First-run setup (PowerShell — no bash required)
+.\scripts\setup.ps1
+# or just double-click scripts\setup.bat
+
+# Start the app
+.\scripts\start.ps1
+# or double-click scripts\start.bat
+>>>>>>> 5ff3975d193301b6e482120120274a12949b6e9c
 
 # Open in browser:
 #   http://127.0.0.1:3001
 ```
 
+<<<<<<< HEAD
 Or with Docker Compose:
+=======
+**Requirements**: Python 3.11+ from https://python.org (check "Add Python to PATH" during install).
+
+### On macOS / Linux
+
+```bash
+./scripts/setup.sh
+./scripts/start.sh
+```
+
+Or the cross-platform Python script (works everywhere):
+
+```bash
+python scripts/setup.py
+python scripts/start.py
+```
+
+### With Docker Compose
+>>>>>>> 5ff3975d193301b6e482120120274a12949b6e9c
 
 ```bash
 cp .env.example .env
@@ -55,6 +88,7 @@ docker compose up -d
 
 ### 1. Set master password (first run only)
 
+<<<<<<< HEAD
 ```bash
 ./scripts/setup.sh
 # or manually:
@@ -63,10 +97,78 @@ python -m cli.server_manager setup
 
 ### 2. Start the app
 
+=======
+**Windows (PowerShell):**
+```powershell
+.\scripts\setup.ps1
+```
+
+**Windows (CMD):**
+```cmd
+scripts\setup.bat
+```
+
+**macOS / Linux:**
+```bash
+./scripts/setup.sh
+```
+
+**Cross-platform:**
+```bash
+python scripts/setup.py
+```
+
+### 1b. (Optional) Pre-seed your servers
+
+If you have a fixed list of personal servers with their SSH credentials, you
+can register them all at once via a JSON file instead of typing them through
+the UI.
+
+1. Copy the example file:
+   - Windows: `copy scripts\servers.local.json.example scripts\servers.local.json`
+   - macOS/Linux: `cp scripts/servers.local.json.example scripts/servers.local.json`
+2. Edit `scripts/servers.local.json` with your server's name, host, username,
+   password, and notes (see the example file for the schema).
+3. Run the seed script (will ask for your master password to encrypt the
+   credentials):
+   ```
+   python scripts/seed-servers.py
+   ```
+
+**Security**: `servers.local.json` is gitignored — it will never be committed
+to GitHub. The plaintext password is read once, encrypted with the master
+password (sealed box), and inserted into the local DB. The plaintext is
+discarded immediately.
+
+You can re-run the seed script any time — it will **update** existing servers
+by name (so changing a password is as simple as editing the JSON and re-running).
+
+### 2. Start the app
+
+**Windows (PowerShell):**
+```powershell
+.\scripts\start.ps1
+```
+
+**Windows (CMD):**
+```cmd
+scripts\start.bat
+```
+
+**macOS / Linux:**
+>>>>>>> 5ff3975d193301b6e482120120274a12949b6e9c
 ```bash
 ./scripts/start.sh
 ```
 
+<<<<<<< HEAD
+=======
+**Cross-platform:**
+```bash
+python scripts/start.py
+```
+
+>>>>>>> 5ff3975d193301b6e482120120274a12949b6e9c
 ### 3. Sign in
 
 Open `http://127.0.0.1:3001`, enter your master password.
@@ -167,12 +269,35 @@ access controls.
 
 ## Troubleshooting
 
+<<<<<<< HEAD
 ### "Master password not set"
 Run `./scripts/setup.sh` (or `python -m cli.server_manager setup`).
 
 ### "Failed to decrypt password — wrong master password?"
 Either the master password you entered at login is wrong, or the keypair file
 (`data/keypair.json`) is corrupted. Re-run setup after deleting `data/`.
+=======
+### "The system cannot find the path specified" (Windows + bash)
+You probably ran `setup.sh` from a bash emulator on Windows (Git Bash / VSCode bash).
+Use the Windows-native scripts instead:
+- PowerShell: `.\scripts\setup.ps1`
+- CMD: `scripts\setup.bat`
+- Or universal: `python scripts\setup.py`
+
+### "python is not recognized" (Windows)
+Python is not installed or not on PATH. Install Python 3.11+ from https://python.org
+— during install, **check "Add Python to PATH"**. Then close and reopen your terminal.
+
+### "Master password not set"
+- Windows: `.\scripts\setup.ps1`
+- macOS/Linux: `./scripts/setup.sh`
+- Cross-platform: `python scripts/setup.py`
+
+### "Failed to decrypt password — wrong master password?"
+Either the master password you entered at login is wrong, or the keypair file
+(`data/keypair.json`) is corrupted. Re-run setup after deleting the `data/`
+directory.
+>>>>>>> 5ff3975d193301b6e482120120274a12949b6e9c
 
 ### "Connection refused" when testing server
 - Verify the server is reachable: `ssh user@host` from your laptop

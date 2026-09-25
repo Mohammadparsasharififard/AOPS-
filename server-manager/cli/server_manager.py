@@ -10,6 +10,10 @@ from __future__ import annotations
 
 import getpass
 import sys
+<<<<<<< HEAD
+=======
+from pathlib import Path
+>>>>>>> 5ff3975d193301b6e482120120274a12949b6e9c
 
 import click
 from rich.console import Console
@@ -63,9 +67,35 @@ def setup() -> None:
     sk_bytes, pk_bytes = generate_keypair(pw1)
     save_keypair(sk_bytes, pk_bytes, pw1)
     h = hash_master_password(pw1)
+<<<<<<< HEAD
     # Append to .env
     with open(".env", "a", encoding="utf-8") as f:
         f.write(f"\nMASTER_PASSWORD_HASH={h}\n")
+=======
+    # Write to .env — replace existing MASTER_PASSWORD_HASH line or append
+    env_path = Path(".env")
+    if env_path.exists():
+        lines = env_path.read_text(encoding="utf-8").splitlines()
+        replaced = False
+        for i, line in enumerate(lines):
+            # Match both "MASTER_PASSWORD_HASH=" and "# MASTER_PASSWORD_HASH="
+            stripped = line.lstrip("# ").strip()
+            if stripped.startswith("MASTER_PASSWORD_HASH="):
+                lines[i] = f"MASTER_PASSWORD_HASH={h}"
+                replaced = True
+                break
+        if replaced:
+            env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        else:
+            # Append
+            with open(env_path, "a", encoding="utf-8") as f:
+                f.write(f"\nMASTER_PASSWORD_HASH={h}\n")
+    else:
+        with open(env_path, "w", encoding="utf-8") as f:
+            f.write(f"MASTER_PASSWORD_HASH={h}\n")
+    # Re-init settings cache so the new value is picked up
+    get_settings.cache_clear()  # type: ignore[attr-defined]
+>>>>>>> 5ff3975d193301b6e482120120274a12949b6e9c
     console.print("[green]Keypair generated and saved.[/green]")
     console.print(f"[green]Master password hash saved to .env (MASTER_PASSWORD_HASH).[/green]")
 
