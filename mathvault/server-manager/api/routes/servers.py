@@ -189,17 +189,27 @@ async def get_status(server_id: str, request: Request, db: Session = Depends(get
 
 @router.get("/{server_id}/actions", dependencies=[Depends(require_session)])
 async def list_actions(server_id: str, db: Session = Depends(get_db)) -> list[dict]:
-    """List the predefined safe one-click server actions."""
+    """List the predefined safe one-click server actions, grouped by category."""
     s = db.get(Server, server_id)
     if not s:
         raise HTTPException(404, "Server not found")
     return [
         {
             "id": a["id"], "label": a["label"], "description": a["description"],
-            "danger": a["danger"], "command": a["command"],
+            "danger": a.get("danger", False), "command": a["command"],
+            "category": a.get("category", "Other"),
         }
         for a in ssh_service.SAFE_ACTIONS
     ]
+
+@router.get("/{server_id}/actions/categories", dependencies=[Depends(require_session)])
+async def list_action_categories(server_id: str, db: Session = Depends(get_db)) -> list[str]:
+    """List all available action categories."""
+    s = db.get(Server, server_id)
+    if not s:
+        raise HTTPException(404, "Server not found")
+    cats = sorted(set(a.get("category", "Other") for a in ssh_service.SAFE_ACTIONS))
+    return cats
 
 
 class ActionRunRequest(BaseModel):
