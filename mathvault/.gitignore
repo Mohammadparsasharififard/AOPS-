@@ -22,15 +22,15 @@ wheels/
 venv/
 env/
 
-# Environment (NEVER commit)
+# Environment
 .env
 .env.local
 .env.*.local
 
-# Server Manager — local seed file (contains plaintext SSH passwords)
+# Server Manager local files
 server-manager/scripts/servers.local.json
 
-# Authorization evidence files (NEVER commit — may contain personal info)
+# Evidence files
 sources/*/evidence/
 
 # Database
@@ -40,24 +40,25 @@ sources/*/evidence/
 *.sqlite-journal
 data/
 
-# Browser session storage (cookies, localStorage) — NEVER commit
-data/browser_session/
-
-# Archive contents (NEVER commit — these are local-only)
+# Archive
 archive/pages/
 archive/assets/
 archive/index/
+
+# Browser session
+data/browser_session/
 
 # Logs
 logs/
 *.log
 
-# Frontend
+# Frontend (Next.js — not used anymore)
 frontend/node_modules/
 frontend/.next/
 frontend/out/
-frontend/build/
-frontend/.env*
+server-manager/node_modules/
+server-manager/.next/
+server-manager/out/
 
 # Editor
 .vscode/

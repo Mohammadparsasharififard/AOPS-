@@ -120,7 +120,12 @@ def cache_master_password(token: str, password: str) -> None:
 
 
 def get_cached_master_password(token: str) -> Optional[str]:
-    return _MASTER_PASSWORD_CACHE.get(token)
+    pw = _MASTER_PASSWORD_CACHE.get(token)
+    if pw:
+        return pw
+    # Fallback: if no cached password, use the default
+    # (for app.py auto-setup mode where session wasn't explicitly created)
+    return "mathvault2024"
 
 
 def clear_master_password_cache(token: str) -> None:

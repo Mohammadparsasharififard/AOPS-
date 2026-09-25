@@ -96,25 +96,17 @@ def init_dbs():
                    cwd=str(ROOT), timeout=30)
 
 def seed_server():
-    """Pre-configure the SSH server (mp@192.168.1.150)."""
-    import json
-    from pathlib import Path
+    """Directly insert SSH server (mp@192.168.1.150) into DB — no seeding script needed."""
+    import hashlib
     sys.path.insert(0, str(SM))
     os.chdir(str(SM))
-    
-    sj = SM / "scripts" / "servers.local.json"
-    if not sj.exists():
-        sj.write_text(json.dumps([{
-            "name": "my-server", "host": "192.168.1.150", "port": 22,
-            "username": "mp", "auth_method": "password",
-            "password": "Mp13911391!", "notes": "Personal Ubuntu server"
-        }], indent=2), encoding="utf-8")
-    
-    # Check if master password is set; if not, set a default one
+    os.environ["PYTHONPATH"] = str(SM)
+
+    # Set default master password if not set
     env_file = SM / ".env"
     content = env_file.read_text(encoding="utf-8")
-    if "MASTER_PASSWORD_HASH=" not in content or content.split("MASTER_PASSWORD_HASH=")[1].strip() == "":
-        # Set default master password "mathvault2024"
+    has_hash = any(line.startswith("MASTER_PASSWORD_HASH=") and len(line.split("=",1)[1].strip()) > 0 for line in content.splitlines())
+    if not has_hash:
         from crypto import generate_keypair, hash_master_password, save_keypair
         pw = "mathvault2024"
         sk, pk = generate_keypair(pw)
@@ -123,10 +115,36 @@ def seed_server():
         with open(env_file, "a", encoding="utf-8") as f:
             f.write(f"\nMASTER_PASSWORD_HASH={h}\n")
         print(f"[setup] Master password: {pw}")
-    
-    # Run seed
-    subprocess.run([PY, "scripts/seed-servers.py"] if (SM / "scripts" / "seed-servers.py").exists() 
-                   else [PY, "-c", "print('seed skipped')"], cwd=str(SM), timeout=30)
+
+    # Directly insert the server into DB (bypass seeding script)
+    from database.session import session_scope
+    from database.models import Server
+    from sqlalchemy import select
+    from crypto import encrypt_credential
+
+    # Get the master password for encryption
+    from config import get_settings
+    get_settings.cache_clear()
+    settings = get_settings()
+    master_pw = "mathvault2024"
+
+    with session_scope() as db:
+        existing = db.execute(select(Server).where(Server.host == "192.168.1.150")).scalar_one_or_none()
+        if existing is None:
+            server = Server(
+                name="my-server",
+                host="192.168.1.150",
+                port=22,
+                username="mp",
+                auth_method="password",
+                encrypted_password=encrypt_credential("Mp13911391!"),
+                notes="Personal Ubuntu server",
+            )
+            db.add(server)
+            db.commit()
+            print("[setup] Server registered: mp@192.168.1.150")
+        else:
+            print("[setup] Server already exists")
 
 # ============================================================
 # 3. Built-in Web UI (no Next.js — pure HTML served by FastAPI)
