@@ -27,7 +27,6 @@ DEPS = [
     "click", "rich", "pydantic", "pydantic-settings", "python-dotenv",
     "python-multipart", "itsdangerous", "playwright", "httpx", "tenacity",
     "beautifulsoup4", "lxml", "bleach", "pyyaml", "slowapi", "jinja2",
-    "ssh2061",
 ]
 
 def install():
@@ -115,6 +114,12 @@ def seed_server():
         with open(env_file, "a", encoding="utf-8") as f:
             f.write(f"\nMASTER_PASSWORD_HASH={h}\n")
         print(f"[setup] Master password: {pw}")
+
+    # CRITICAL: Clear settings cache so it re-reads .env with the hash
+    from config import get_settings
+    get_settings.cache_clear()
+    s = get_settings()
+    print(f"[setup] Auth configured: {bool(s.master_password_hash)}")
 
     # Directly insert the server into DB (bypass seeding script)
     from database.session import session_scope
@@ -251,11 +256,34 @@ input,select{background:#334155;border:1px solid #475569;color:#e2e8f0;padding:6
 
 <script>
 const API = window.location.origin + '/api';
-const AUTH = btoa('admin:');
+
+// Login first to get session cookie
+async function login() {
+  try {
+    const r = await fetch(API + '/auth/login', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({master_password: 'mathvault2024'}),
+      credentials: 'include'
+    });
+    if (r.ok) { console.log('Logged in'); return true; }
+    // Maybe setup is needed
+    if (r.status === 400) {
+      const r2 = await fetch(API + '/auth/setup', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({master_password: 'mathvault2024'}),
+        credentials: 'include'
+      });
+      return r2.ok;
+    }
+    return false;
+  } catch(e) { console.error('Login failed:', e); return false; }
+}
 
 async function fetchAPI(path, opts={}) {
   try {
-    const r = await fetch(API + path, {...opts, headers:{'Authorization':'Basic '+AUTH, ...opts.headers}});
+    const r = await fetch(API + path, {...opts, credentials: 'include', headers: {...opts.headers}});
     const data = await r.json();
     return data;
   } catch(e) { return {error: e.message}; }
@@ -371,6 +399,11 @@ async function runCmd() {
 }
 
 getStatus();
+// Auto-login on page load
+login().then(ok => {
+  if (ok) getStatus();
+  else document.getElementById('status').innerHTML = 'Login failed — check console';
+});
 </script>
 </body>
 </html>"""
@@ -393,15 +426,36 @@ def main():
     seed_server()
     print("[setup] Done.")
 
-    # Step 3: Start API + Web UI on port 8000
+    # Step 3: Kill any old process on port 8000
+    print("\n[run] Checking port 8000...")
+    if os.name == "nt":
+        subprocess.run("netstat -ano | findstr :8000 | findstr LISTENING", shell=True, capture_output=True, text=True)
+        # Kill old process
+        r = subprocess.run("netstat -ano | findstr :8000 | findstr LISTENING", shell=True, capture_output=True, text=True)
+        if r.stdout.strip():
+            # Extract PID and kill
+            for line in r.stdout.strip().splitlines():
+                parts = line.split()
+                if len(parts) >= 5:
+                    pid = parts[-1]
+                    subprocess.run(f"taskkill /F /PID {pid}", shell=True, capture_output=True)
+                    print(f"  Killed old process PID {pid}")
+        else:
+            print("  Port 8000 is free")
+    else:
+        subprocess.run("fuser -k 8000/tcp 2>/dev/null", shell=True, capture_output=True)
+        print("  Port 8000 cleared")
+
+    # Step 4: Start
     print("\n[run] Starting on http://localhost:8000")
     print("[run] Master password: mathvault2024")
+    print("[run] SSH: mp@192.168.1.150 (Mp13911391!)")
     print("[run] Press Ctrl+C to stop.\n")
 
     os.environ["PYTHONPATH"] = str(SM)
     os.chdir(str(SM))
 
-    # Write the web UI to a file that FastAPI can serve
+    # Write the web UI
     ui_file = SM / "static" / "index.html"
     ui_file.parent.mkdir(parents=True, exist_ok=True)
     ui_file.write_text(WEB_UI, encoding="utf-8")
@@ -412,7 +466,6 @@ def main():
         webbrowser.open("http://localhost:8000")
     threading.Thread(target=open_browser, daemon=True).start()
 
-    # Start uvicorn — serves both API and the web UI
     os.execv(PY, [PY, "-m", "uvicorn", "api.main:app",
                   "--host", "127.0.0.1", "--port", "8000"])
 
