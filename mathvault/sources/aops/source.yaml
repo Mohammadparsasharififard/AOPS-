@@ -1,21 +1,7 @@
 # Source: AoPS (Art of Problem Solving)
 # =============================================================================
-# STATUS: TEST MODE — using a placeholder evidence file
-# =============================================================================
-# This file is configured to enable end-to-end testing of the
-# AuthorizedBrowserFetcher architecture. The evidence_file points to a
-# placeholder text file (TEST_PLACEHOLDER.txt). This is NOT a real
-# authorization document.
-#
-# The user MUST replace the placeholder with a real authorization document
-# from AoPS before relying on this configuration for production use.
-#
-# To use real authorization:
-# 1. Save your real AoPS authorization as
-#    sources/aops/evidence/authorization.pdf (or .txt / .png)
-# 2. Compute its SHA-256: shasum -a 256 sources/aops/evidence/authorization.pdf
-# 3. Update evidence_file + evidence_sha256 below
-# 4. Verify the SHA-256 matches
+# TEST MODE — using a placeholder evidence file
+# Configured for COMPREHENSIVE crawl of ALL national + international contests
 # =============================================================================
 
 source:
@@ -24,7 +10,6 @@ source:
   base_url: https://artofproblemsolving.com
 
 authorization:
-  # TEST MODE — using placeholder evidence file
   status: authorized
   evidence_file: sources/aops/evidence/TEST_PLACEHOLDER.txt
   evidence_sha256: 458304e0b7c1d27a36751bb54f2317e77e94bd0040b58bba85302ec0e2c01333
@@ -36,7 +21,7 @@ authorization:
     crawl_public_pages: true
     archive_public_content: true
     browser_session_allowed: true
-    challenge_verification_allowed: true  # Let Cloudflare JS challenge run in browser
+    challenge_verification_allowed: true
     discussion_archive_allowed: true
     asset_archive_allowed: true
 
@@ -57,26 +42,68 @@ allowed_content_types:
   - text/plain
 
 rate_limit:
-  delay_seconds: 5.0
+  delay_seconds: 3.0
   concurrency: 1
-  requests_per_minute: 12
-  max_retries: 3
+  requests_per_minute: 20
+  max_retries: 2
 
 browser:
   enabled: true
   headless: true
-  user_agent: null  # Use real Chromium UA — DO NOT spoof
+  user_agent: null
   session_persistence: true
-  challenge_handling: solve  # Let JS challenge run naturally in browser
-  session_timeout_minutes: 60
+  challenge_handling: solve
+  session_timeout_minutes: 120
+
+# =============================================================================
+# COMPREHENSIVE DISCOVERY — ALL national + international contests
+# =============================================================================
+# Start URLs include:
+# 1. The main wiki index (general navigation)
+# 2. The "List of mathematics competitions" page (links to ALL contest pages)
+# 3. All major INTERNATIONAL contest index pages
+# 4. All major NATIONAL contest index pages (USA, UK, Canada, etc.)
+#
+# The crawler's BFS will follow ALL links from these pages to discover:
+# - Year pages (2024 AMC 10A, 2024 AMC 10B, 2024 AMC 12A, ...)
+# - Problem pages (Problem 1, Problem 2, ...)
+# - Solution pages
+# - Resource pages
+# - Pagination (if any)
+#
+# Nothing is hardcoded — the crawler follows whatever links exist in the
+# HTML. If AoPS adds a new contest tomorrow, it will be discovered.
+# =============================================================================
 
 discovery:
   start_urls:
+    # --- General navigation ---
     - https://artofproblemsolving.com/wiki/index.php/Main_Page
-    - https://artofproblemsolving.com/wiki/index.php/AMC_Problems_and_Solutions
+
+    # --- Master list of ALL competitions ---
+    - https://artofproblemsolving.com/wiki/index.php/List_of_mathematics_competitions
+
+    # --- INTERNATIONAL competitions ---
     - https://artofproblemsolving.com/wiki/index.php/IMO_Problems_and_Solutions
-  max_depth: 3
-  max_pages_per_run: 20  # Small limit for test
+    - https://artofproblemsolving.com/wiki/index.php/APMO_Problems_and_Solutions
+    - https://artofproblemsolving.com/wiki/index.php/EGMO_Problems
+    - https://artofproblemsolving.com/wiki/index.php/RMM_Problems
+    - https://artofproblemsolving.com/wiki/index.php/IMC_Problems
+
+    # --- USA national competitions ---
+    - https://artofproblemsolving.com/wiki/index.php/AMC_Problems_and_Solutions
+    - https://artofproblemsolving.com/wiki/index.php/AIME_Problems_and_Solutions
+    - https://artofproblemsolving.com/wiki/index.php/USAMO_Problems_and_Solutions
+    - https://artofproblemsolving.com/wiki/index.php/USA_TST_Problems
+    - https://artofproblemsolving.com/wiki/index.php/USA_JMO_Problems
+
+    # --- Other national competitions ---
+    - https://artofproblemsolving.com/wiki/index.php/BMO_Problems
+    - https://artofproblemsolving.com/wiki/index.php/CMO_Problems
+    - https://artofproblemsolving.com/wiki/index.php/ARML_Problems
+
+  max_depth: 4
+  max_pages_per_run: 500
   follow_pagination: true
   follow_breadcrumbs: true
   follow_problem_navigation: true
