@@ -1,0 +1,17 @@
+[Unit]
+Description=Run MathVault incremental sync every N hours
+Requires=mathvault-update.service
+
+[Timer]
+# Run every 2 hours by default — override SYNC_INTERVAL_HOURS env to change.
+# To change interval, edit OnCalendar below OR set the env var in the .service
+# file and use OnUnitActiveSec instead.
+OnCalendar=*-*-* 00/2:00:00
+# Alternative — purely duration-based:
+# OnUnitActiveSec=2h
+# Boot-time first run (with a small delay)
+OnBootSec=5min
+Persistent=true  # catch up if server was off
+
+[Install]
+WantedBy=timers.target

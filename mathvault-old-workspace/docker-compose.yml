@@ -1,0 +1,105 @@
+# =============================================================================
+# MathVault Docker Compose
+# =============================================================================
+# Containers:
+#   mathvault-db      PostgreSQL 15 (production database)
+#   mathvault-api     FastAPI app (also runs CLI for crawl)
+#   mathvault-worker  Optional long-running sync daemon
+# =============================================================================
+
+services:
+  mathvault-db:
+    image: postgres:15-alpine
+    container_name: mathvault-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-mathvault}
+      POSTGRES_USER: ${POSTGRES_USER:-mathvault}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-CHANGE_ME_strong_password}
+    volumes:
+      - mathvault-db-data:/var/lib/postgresql/data
+    # SECURITY: only expose on localhost — never to public internet
+    ports:
+      - "127.0.0.1:5432:5432"
+    networks:
+      - mathvault-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-mathvault} -d ${POSTGRES_DB:-mathvault}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  mathvault-api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    container_name: mathvault-api
+    restart: unless-stopped
+    depends_on:
+      mathvault-db:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: "postgresql+psycopg://${POSTGRES_USER:-mathvault}:${POSTGRES_PASSWORD:-CHANGE_ME_strong_password}@mathvault-db:5432/${POSTGRES_DB:-mathvault}"
+      DB_ENGINE: postgres
+    volumes:
+      - mathvault-archive:/app/archive
+      - mathvault-data:/data
+      - mathvault-logs:/app/logs
+      - ./config:/app/config:ro
+    ports:
+      - "127.0.0.1:8000:8000"  # local-only; put a reverse proxy in front
+    networks:
+      - mathvault-net
+
+  mathvault-frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: mathvault-frontend
+    restart: unless-stopped
+    depends_on:
+      - mathvault-api
+    environment:
+      NEXT_PUBLIC_API_BASE: "http://localhost:8000"
+    ports:
+      - "127.0.0.1:3000:3000"
+    networks:
+      - mathvault-net
+
+  # Optional worker — alternative to systemd timer. Either run this OR the
+  # systemd timer (configured in /systemd/), not both.
+  mathvault-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    container_name: mathvault-worker
+    restart: unless-stopped
+    depends_on:
+      mathvault-db:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: "postgresql+psycopg://${POSTGRES_USER:-mathvault}:${POSTGRES_PASSWORD:-CHANGE_ME_strong_password}@mathvault-db:5432/${POSTGRES_DB:-mathvault}"
+      DB_ENGINE: postgres
+    command: ["worker"]
+    volumes:
+      - mathvault-archive:/app/archive
+      - mathvault-data:/data
+      - mathvault-logs:/app/logs
+      - ./config:/app/config:ro
+    networks:
+      - mathvault-net
+    profiles: ["worker"]  # only starts with `docker compose --profile worker up`
+
+volumes:
+  mathvault-db-data:
+  mathvault-archive:
+  mathvault-data:
+  mathvault-logs:
+
+networks:
+  mathvault-net:
+    driver: bridge
