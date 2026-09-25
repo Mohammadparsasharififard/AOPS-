@@ -257,6 +257,13 @@ input,select{background:#334155;border:1px solid #475569;color:#e2e8f0;padding:6
   </div>
 
   <div class="card">
+    <h2>🚀 Deploy to Server</h2>
+    <p style="font-size:12px;color:#64748b;margin-bottom:8px">Clone + setup MathVault on your server (first time only).</p>
+    <button class="btn btn-ok" onclick="deployCode()">Deploy Code to Server</button>
+    <pre id="deploy-result"></pre>
+  </div>
+
+  <div class="card">
     <h2>🗑️ Delete Archive</h2>
     <p style="font-size:12px;color:#64748b;margin-bottom:8px">Delete downloaded content from the server.</p>
     <button class="btn btn-danger" onclick="deleteAll()">Delete ALL Archived Content</button>
@@ -430,7 +437,7 @@ async function deleteAll() {
   if (d.error || !d.length) { document.getElementById('delete-result').innerHTML = 'No server'; return; }
   const r = await fetchAPI('/servers/'+d[0].id+'/terminal', {
     method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({command: 'rm -rf /opt/mathvault/archive/* /opt/mathvault/data/*.db 2>/dev/null; echo "All deleted"'})
+    body: JSON.stringify({command: 'rm -rf ~/mathvault/archive/* ~/mathvault/data/*.db 2>/dev/null; echo "All deleted"'})
   });
   document.getElementById('delete-result').innerHTML = '<pre>'+(r.stdout||r.stderr||'Done')+'</pre>';
 }
@@ -442,7 +449,7 @@ async function deleteArchive() {
   if (d.error || !d.length) { document.getElementById('delete-result').innerHTML = 'No server'; return; }
   const r = await fetchAPI('/servers/'+d[0].id+'/terminal', {
     method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({command: 'rm -rf /opt/mathvault/archive/pages/* /opt/mathvault/archive/assets/* /opt/mathvault/archive/index/* 2>/dev/null; echo "Archive deleted"'})
+    body: JSON.stringify({command: 'rm -rf ~/mathvault/archive/pages/* ~/mathvault/archive/assets/* ~/mathvault/archive/index/* 2>/dev/null; echo "Archive deleted"'})
   });
   document.getElementById('delete-result').innerHTML = '<pre>'+(r.stdout||r.stderr||'Done')+'</pre>';
 }
@@ -454,9 +461,21 @@ async function deleteDB() {
   if (d.error || !d.length) { document.getElementById('delete-result').innerHTML = 'No server'; return; }
   const r = await fetchAPI('/servers/'+d[0].id+'/terminal', {
     method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({command: 'rm -f /opt/mathvault/data/*.db /opt/mathvault/data/*.db-wal /opt/mathvault/data/*.db-shm 2>/dev/null; echo "DB deleted"'})
+    body: JSON.stringify({command: 'rm -f ~/mathvault/data/*.db ~/mathvault/data/*.db-wal ~/mathvault/data/*.db-shm 2>/dev/null; echo "DB deleted"'})
   });
   document.getElementById('delete-result').innerHTML = '<pre>'+(r.stdout||r.stderr||'Done')+'</pre>';
+}
+
+async function deployCode() {
+  if (!confirm('Deploy MathVault code to server?\\nThis clones the repo to ~/mathvault/ and installs deps.')) return;
+  document.getElementById('deploy-result').innerHTML = 'Deploying... (takes 1-2 min)';
+  const d = await fetchAPI('/servers');
+  if (d.error || !d.length) { document.getElementById('deploy-result').innerHTML = 'No server'; return; }
+  const r = await fetchAPI('/servers/'+d[0].id+'/terminal', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({command: 'cd ~ && if [ ! -d mathvault ]; then git clone https://github.com/Mohammadparsasharififard/AOPS-.git mathvault; fi && cd mathvault && git pull && python3 -m venv .venv && .venv/bin/pip install -q fastapi uvicorn sqlalchemy httpx tenacity beautifulsoup4 lxml bleach bcrypt click rich pydantic pydantic-settings python-dotenv pyyaml slowapi jinja2 itsdangerous paramiko pynacl && .venv/bin/python -m playwright install chromium && cp .env.example .env 2>/dev/null; .venv/bin/python -c "from database.session import init_db; init_db()" && echo "DEPLOY OK" && ls -la ~/mathvault/'})
+  });
+  document.getElementById('deploy-result').innerHTML = '<pre>'+(r.stdout||r.stderr||'Done')+'</pre>';
 }
 </script>
 </body>
