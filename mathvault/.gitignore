@@ -41,6 +41,9 @@ sources/*/evidence/
 *.sqlite-journal
 data/
 
+# Browser session storage (cookies, localStorage) — NEVER commit
+data/browser_session/
+
 # Archive contents (NEVER commit — these are local-only)
 archive/pages/
 archive/assets/

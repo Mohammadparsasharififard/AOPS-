@@ -90,6 +90,7 @@ def create_app() -> FastAPI:
     app.include_router(routes.tags.router, prefix="/api/tags", tags=["tags"])
     app.include_router(routes.blocked.router, prefix="/api/blocked", tags=["blocked"])
     app.include_router(routes.coverage.router, prefix="/api", tags=["coverage"])
+    app.include_router(routes.crawl_stats.router, prefix="/api", tags=["crawl_stats"])
 
     # Admin — protected by basic auth
     app.include_router(routes.admin.router, prefix="/api/admin", tags=["admin"])

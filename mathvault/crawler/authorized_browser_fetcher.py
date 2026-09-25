@@ -33,7 +33,9 @@ CRITICAL RULES (NEVER VIOLATED):
 from __future__ import annotations
 
 import logging
+import os
 import time
+from pathlib import Path
 from typing import Optional
 from urllib.parse import urlparse
 
@@ -72,6 +74,8 @@ class AuthorizedBrowserFetcher(Fetcher):
         max_retries: int = 3,
         timeout_seconds: int = 30,
         session_timeout_minutes: int = 60,
+        session_persistence: bool = True,
+        session_storage_path: Optional[str] = None,
     ) -> None:
         # Validate authorization
         if not authorization.can_use_browser():
@@ -87,6 +91,28 @@ class AuthorizedBrowserFetcher(Fetcher):
         self.max_retries = max_retries
         self.timeout = timeout_seconds
         self.session_timeout_minutes = session_timeout_minutes
+        self.session_persistence = session_persistence
+
+        # Where to persist browser session (cookies, etc.) between runs.
+        # Default: <archive_root_parent>/data/browser_session/
+        # This directory is gitignored (data/ is in .gitignore).
+        if session_storage_path:
+            self.session_storage_path = Path(session_storage_path)
+        else:
+            try:
+                from config import get_settings
+                s = get_settings()
+                self.session_storage_path = s.data_path / "browser_session"
+            except Exception:
+                self.session_storage_path = Path("./data/browser_session")
+
+        if self.session_persistence:
+            self.session_storage_path.mkdir(parents=True, exist_ok=True)
+            # Restrict permissions
+            try:
+                os.chmod(self.session_storage_path, 0o700)
+            except Exception:
+                pass
 
         self._playwright = None
         self._browser = None
@@ -116,18 +142,50 @@ class AuthorizedBrowserFetcher(Fetcher):
         self.close()
 
     def _start_session(self) -> None:
-        """Start a fresh browser session."""
+        """Start a browser session.
+
+        If session_persistence is True, uses Playwright's persistent
+        context — cookies (including cf_clearance) survive across
+        crawl runs. The persistent storage is at self.session_storage_path
+        (gitignored under data/).
+
+        If session_persistence is False, uses a fresh non-persistent
+        context — cookies discarded at close().
+        """
         self._playwright = self._sync_playwright().start()
-        # Use persistent context so cookies survive within the session
-        # (but not across sessions — never persisted to disk)
-        self._browser = self._playwright.chromium.launch(headless=self.headless)
-        self._context = self._browser.new_context()
+
+        if self.session_persistence:
+            # Persistent context — cookies/localStorage survive across runs
+            # The cf_clearance cookie from a manually-solved CAPTCHA will
+            # be available in the next run, so subsequent runs may not
+            # need a CAPTCHA.
+            self._context = self._playwright.chromium.launch_persistent_context(
+                user_data_dir=str(self.session_storage_path),
+                headless=self.headless,
+            )
+            self._browser = None  # not used with persistent context
+            logger.info(
+                "Authorized browser session started (persistent, headless=%s, storage=%s)",
+                self.headless, self.session_storage_path,
+            )
+        else:
+            # Non-persistent — fresh session each time
+            self._browser = self._playwright.chromium.launch(headless=self.headless)
+            self._context = self._browser.new_context()
+            logger.info(
+                "Authorized browser session started (non-persistent, headless=%s)",
+                self.headless,
+            )
         # Never spoof user agent — use Chromium's default
         self._session_started_at = time.monotonic()
-        logger.info("Authorized browser session started (headless=%s)", self.headless)
 
     def close(self) -> None:
-        """Close the browser session. Cookies are discarded (not persisted)."""
+        """Close the browser session.
+
+        If session_persistence is True, cookies are saved to disk for the
+        next run (still gitignored under data/). If False, cookies are
+        discarded.
+        """
         if self._context:
             try:
                 self._context.close()
@@ -146,7 +204,13 @@ class AuthorizedBrowserFetcher(Fetcher):
             except Exception:
                 pass
             self._playwright = None
-        logger.info("Authorized browser session closed (cookies discarded)")
+        if self.session_persistence:
+            logger.info(
+                "Authorized browser session closed (cookies saved to %s for next run)",
+                self.session_storage_path,
+            )
+        else:
+            logger.info("Authorized browser session closed (cookies discarded)")
 
     def _restart_if_expired(self) -> None:
         """Restart the browser session if it has been alive too long."""

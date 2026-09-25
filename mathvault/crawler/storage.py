@@ -51,29 +51,142 @@ _ALLOWED_TAGS = list(bleach.sanitizer.ALLOWED_TAGS) + [
     "sup", "sub",
     "math", "mrow", "mi", "mo", "mn", "msup", "msub", "mfrac", "msqrt", "mroot",
     "annotation",
+    # Media + interactive tags (for offline link rewriting)
+    "iframe", "video", "audio", "source", "form", "input", "button",
+    "link", "label",
 ]
 _ALLOWED_ATTRS = {
     **bleach.sanitizer.ALLOWED_ATTRIBUTES,
     "a": ["href", "title"],
     "img": ["src", "alt", "title", "width", "height"],
-    "*": ["class", "id", "data-*"],
+    "iframe": ["src", "title", "name"],
+    "video": ["src", "controls", "width", "height"],
+    "audio": ["src", "controls"],
+    "source": ["src", "type"],
+    "form": ["action", "method"],
+    "input": ["type", "name", "value"],
+    "button": ["type"],
+    "link": ["href", "rel", "type", "as"],
+    "*": ["class", "id", "data-*", "style"],
     "math": ["xmlns", "display"],
     "annotation": ["encoding"],
 }
 _ALLOWED_PROTOCOLS = ["http", "https", "mailto"]
 
 
-def sanitize_html(html: str) -> str:
-    """Strip dangerous HTML (scripts, inline JS, JS URLs)."""
+def _sanitize_style_attribute(style: str) -> str:
+    """Sanitize a CSS style attribute — remove dangerous URL protocols but
+    preserve image URLs (which may be rewritten later for offline use).
+    """
+    if not style:
+        return ""
+    # Remove javascript: and vbscript: URLs in url() and @import
+    import re
+    # Block dangerous protocols inside url(...)
+    def _block_dangerous(match):
+        url = match.group(1).strip("'\"").lower()
+        if url.startswith(("javascript:", "vbscript:", "file:", "data:text/html")):
+            return "url()"
+        return match.group(0)
+    cleaned = re.sub(r'url\(["\']?([^"\')]*)["\']?\)', _block_dangerous, style, flags=re.IGNORECASE)
+    # Remove expression() (IE-only but legacy XSS)
+    cleaned = re.sub(r'expression\s*\([^)]*\)', '', cleaned, flags=re.IGNORECASE)
+    # Remove @import url() (CSS injection vector)
+    cleaned = re.sub(r'@import\s+url\s*\([^)]*\)', '', cleaned, flags=re.IGNORECASE)
+    return cleaned
+
+
+def sanitize_html(html: str, source_canonical: Optional[str] = None, db_session=None) -> str:
+    """Strip dangerous HTML (scripts, inline JS, JS URLs).
+
+    Optionally rewrites inline style url() references to local /api/assets/...
+    URLs BEFORE sanitizing (so bleach doesn't strip them).
+
+    Args:
+        html: Raw HTML to sanitize.
+        source_canonical: If provided, url() references inside style
+            attributes are resolved against this URL.
+        db_session: If provided (with source_canonical), asset URLs
+            found in style attributes are looked up in the DB and
+            rewritten to /api/assets/{id}.
+    """
     if not html:
         return ""
-    return bleach.clean(
+    from bs4 import BeautifulSoup
+    from urllib.parse import urljoin
+
+    # Pre-process: rewrite inline style url() references to local
+    # /api/assets/{id} URLs (where the asset exists in the DB).
+    # This is done BEFORE bleach (which would otherwise strip the style).
+    if source_canonical and db_session is not None:
+        try:
+            soup_pre = BeautifulSoup(html, "lxml")
+            # Build asset URL → ID map (limited)
+            from database.models import Asset
+            from sqlalchemy import select
+            asset_rows = db_session.execute(
+                select(Asset.id, Asset.asset_url).limit(5000)
+            ).all()
+            assets_map = {url: aid for aid, url in asset_rows}
+
+            for el in soup_pre.find_all(style=True):
+                style = el["style"]
+                if "url(" in style:
+                    import re
+                    def _replace_url(match):
+                        url = match.group(1).strip("'\"")
+                        if not url or url.startswith("data:"):
+                            return match.group(0)
+                        absolute = urljoin(source_canonical, url)
+                        asset_id = assets_map.get(absolute)
+                        if asset_id:
+                            return f"url('/api/assets/{asset_id}')"
+                        return match.group(0)
+                    new_style = re.sub(
+                        r'url\(["\']?([^"\')]*)["\']?\)',
+                        _replace_url, style,
+                    )
+                    if new_style != style:
+                        el["style"] = new_style
+            html = str(soup_pre)
+        except Exception:
+            pass
+
+    # Now sanitize with bleach (still strips dangerous style values like
+    # javascript: URLs — but our local /api/assets/ URLs are safe)
+    # We need to bypass bleach's CSS validation for `style` by using
+    # our own pre-sanitization + re-attach approach.
+    # Strategy: capture styles, run bleach, then re-attach.
+    style_capture: list[tuple[int, str]] = []
+    try:
+        soup_capture = BeautifulSoup(html, "lxml")
+        for i, el in enumerate(soup_capture.find_all(style=True)):
+            sanitized = _sanitize_style_attribute(el["style"])
+            style_capture.append((i, sanitized))
+    except Exception:
+        pass
+
+    cleaned = bleach.clean(
         html,
         tags=_ALLOWED_TAGS,
         attributes=_ALLOWED_ATTRS,
         protocols=_ALLOWED_PROTOCOLS,
         strip=True,
     )
+
+    # Re-attach styles by index (i-th element with style in original)
+    if style_capture:
+        try:
+            soup_post = BeautifulSoup(cleaned, "lxml")
+            post_styled = soup_post.find_all(style=True)
+            for i, (orig_idx, sanitized_style) in enumerate(style_capture):
+                if i < len(post_styled) and sanitized_style:
+                    post_styled[i]["style"] = sanitized_style
+            cleaned = str(soup_post)
+        except Exception:
+            pass
+
+    return cleaned
 
 
 class Storage:
@@ -214,13 +327,19 @@ class Storage:
     def _rewrite_links_for_offline(self, html: str, source_canonical: str) -> str:
         """Rewrite internal links in archived HTML to local API paths.
 
-        - For each <a href> that points to an internal URL we have archived:
-          rewrite to /api/pages/{page_id} (the local snapshot)
-        - For each <a href> that points to an internal URL we have NOT archived:
-          rewrite to a "not available offline" placeholder
-        - For <img src>: rewrite to /api/assets/{asset_id} (local asset)
-        - External links: leave untouched (they will require internet)
-        - Hash-only links (#section): leave untouched
+        Rewrites:
+        - <a href>     → /api/pages/{page_id}    (if page is archived)
+                       → data-mv-status='not-archived' (if not archived, same host)
+        - <img src>    → /api/assets/{asset_id}  (if asset is archived)
+        - <source src> → /api/assets/{asset_id}  (for <video>/<audio>)
+        - <source srcset> → first URL only (rough handling)
+        - <iframe src> → /api/pages/{page_id}   (if page is archived)
+        - <link href>  → /api/assets/{asset_id}  (for stylesheets/fonts)
+        - <form action>→ /api/pages/{page_id}   (if action URL is archived)
+        - inline style url() → /api/assets/{asset_id} (rough handling)
+
+        External links are left untouched (they will require internet).
+        Hash-only links (#section) are left untouched.
         """
         try:
             from bs4 import BeautifulSoup
@@ -240,35 +359,51 @@ class Storage:
             except Exception:
                 pass
 
+            # Build a map of asset_url → asset_id for known assets
+            assets_map: dict[str, str] = {}
+            try:
+                from database.models import Asset
+                asset_rows = self.db.execute(
+                    select(Asset.id, Asset.asset_url).limit(5000)
+                ).all()
+                assets_map = {url: aid for aid, url in asset_rows}
+            except Exception:
+                pass
+
+            source_host = (urlparse(source_canonical).hostname or "").lower()
+            from crawler.normalizer import canonicalize_url
+
+            def _resolve_page_id(absolute_url: str) -> Optional[str]:
+                """Lookup page_id by canonical URL."""
+                if "#" in absolute_url:
+                    absolute_url = absolute_url.split("#", 1)[0]
+                canon = canonicalize_url(absolute_url)
+                return pages_map.get(canon)
+
+            def _resolve_asset_id(absolute_url: str) -> Optional[str]:
+                """Lookup asset_id by absolute URL."""
+                return assets_map.get(absolute_url)
+
+            def _is_internal(absolute_url: str) -> bool:
+                target_host = (urlparse(absolute_url).hostname or "").lower()
+                return target_host == source_host and target_host
+
             # Rewrite <a href>
             for a in soup.find_all("a", href=True):
                 href = a["href"].strip()
-                if not href or href.startswith("#") or href.startswith("mailto:") or href.startswith("javascript:"):
+                if not href or href.startswith("#"):
                     continue
-                if href.startswith("data:"):
+                if href.startswith(("mailto:", "javascript:", "tel:", "data:")):
                     continue
                 absolute = urljoin(source_canonical, href)
-                # Strip fragment
-                if "#" in absolute:
-                    absolute_no_frag = absolute.split("#", 1)[0]
-                else:
-                    absolute_no_frag = absolute
-                # Try canonical lookup
-                from crawler.normalizer import canonicalize_url
-                canon = canonicalize_url(absolute_no_frag)
-                page_id = pages_map.get(canon)
+                page_id = _resolve_page_id(absolute)
                 if page_id:
                     a["href"] = f"/api/pages/{page_id}"
                     if "#" in absolute:
                         a["href"] += "#" + absolute.split("#", 1)[1]
-                else:
-                    # Internal (same host as source) but not archived → flag
-                    source_host = (urlparse(source_canonical).hostname or "").lower()
-                    target_host = (urlparse(absolute).hostname or "").lower()
-                    if target_host == source_host and target_host:
-                        # Mark as not-archived — keep href but add data-mv attribute
-                        a["data-mv-status"] = "not-archived"
-                        # Leave href as-is so user sees the external URL when clicked
+                elif _is_internal(absolute):
+                    # Internal but not archived → flag
+                    a["data-mv-status"] = "not-archived"
 
             # Rewrite <img src>
             for img in soup.find_all("img", src=True):
@@ -276,14 +411,81 @@ class Storage:
                 if not src or src.startswith("data:"):
                     continue
                 absolute = urljoin(source_canonical, src)
-                # Find local asset
-                from database.models import Asset
-                asset = self.db.execute(
-                    select(Asset).where(Asset.asset_url == absolute)
-                ).scalar_one_or_none()
-                if asset and asset.local_path:
-                    img["src"] = f"/api/assets/{asset.id}"
-                # If asset not found, leave src — it will require internet
+                asset_id = _resolve_asset_id(absolute)
+                if asset_id:
+                    img["src"] = f"/api/assets/{asset_id}"
+
+            # Rewrite <source src> (for <video>/<audio>)
+            for source_tag in soup.find_all("source", src=True):
+                src = source_tag["src"].strip()
+                if not src or src.startswith("data:"):
+                    continue
+                absolute = urljoin(source_canonical, src)
+                asset_id = _resolve_asset_id(absolute)
+                if asset_id:
+                    source_tag["src"] = f"/api/assets/{asset_id}"
+
+            # Rewrite <iframe src>
+            for iframe in soup.find_all("iframe", src=True):
+                src = iframe["src"].strip()
+                if not src or src.startswith("data:"):
+                    continue
+                absolute = urljoin(source_canonical, src)
+                page_id = _resolve_page_id(absolute)
+                if page_id:
+                    iframe["src"] = f"/api/pages/{page_id}"
+                elif _is_internal(absolute):
+                    iframe["data-mv-status"] = "not-archived"
+                    # Don't keep src — iframe loading external content is dangerous
+                    # Show 'not archived' instead
+                    iframe["src"] = "about:blank"
+
+            # Rewrite <link href> (stylesheets, fonts)
+            for link in soup.find_all("link", href=True):
+                href = link["href"].strip()
+                if not href or href.startswith("data:"):
+                    continue
+                absolute = urljoin(source_canonical, href)
+                asset_id = _resolve_asset_id(absolute)
+                if asset_id:
+                    link["href"] = f"/api/assets/{asset_id}"
+
+            # Rewrite <form action>
+            for form in soup.find_all("form", action=True):
+                action = form["action"].strip()
+                if not action or action.startswith("#"):
+                    continue
+                if action.startswith(("mailto:", "javascript:")):
+                    continue
+                absolute = urljoin(source_canonical, action)
+                page_id = _resolve_page_id(absolute)
+                if page_id:
+                    form["action"] = f"/api/pages/{page_id}"
+                elif _is_internal(absolute):
+                    form["data-mv-status"] = "not-archived"
+
+            # Rewrite inline style="...url(...)..."
+            for el in soup.find_all(style=True):
+                style = el["style"]
+                if "url(" in style:
+                    # Rough regex replacement — captures the URL inside url(...)
+                    import re
+                    def _replace_url(match):
+                        url = match.group(1).strip("'\"")
+                        if not url or url.startswith("data:"):
+                            return match.group(0)
+                        absolute = urljoin(source_canonical, url)
+                        asset_id = _resolve_asset_id(absolute)
+                        if asset_id:
+                            return f"url('/api/assets/{asset_id}')"
+                        return match.group(0)
+                    new_style = re.sub(
+                        r'url\(["\']?([^"\')]*)["\']?\)',
+                        _replace_url,
+                        style,
+                    )
+                    if new_style != style:
+                        el["style"] = new_style
 
             return str(soup)
         except Exception as e:
