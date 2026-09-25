@@ -30,6 +30,8 @@ authorization:
 
 allowed_paths:
   - /wiki/index.php/
+  - /community/c14_international_contests
+  - /community/c16_national_and_regional_contests
 
 allowed_content_types:
   - text/html
@@ -77,12 +79,13 @@ browser:
 
 discovery:
   start_urls:
-    # --- General navigation (5) ---
+    # --- Community contest pages ---
+    - https://artofproblemsolving.com/community/c14_international_contests
+    - https://artofproblemsolving.com/community/c16_national_and_regional_contests
+
+    # --- General wiki navigation ---
     - https://artofproblemsolving.com/wiki/index.php/Main_Page
     - https://artofproblemsolving.com/wiki/index.php/List_of_mathematics_competitions
-    - https://artofproblemsolving.com/wiki/index.php/List_of_international_mathematics_competitions
-    - https://artofproblemsolving.com/wiki/index.php/List_of_regional_mathematics_competitions
-    - https://artofproblemsolving.com/wiki/index.php/Mathematical_olympiads
 
     # --- INTERNATIONAL competitions (9) ---
     - https://artofproblemsolving.com/wiki/index.php/IMO_Problems_and_Solutions
@@ -149,7 +152,6 @@ discovery:
 respect_robots: true
 
 never_archive:
-  - /community/
   - /school/
   - /store/
   - /admin/

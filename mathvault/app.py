@@ -56,8 +56,10 @@ def setup_env():
     if not root_env.exists():
         root_env.write_text(
             "ARCHIVE_ALLOWED_DOMAINS=artofproblemsolving.com,latex.artofproblemsolving.com\n"
-            "ARCHIVE_ALLOWED_PATH_PREFIXES=/wiki/index.php/,/c/,/3/,/4/,/9/,/b/,/f/\n"
-            "ARCHIVE_START_URLS=https://artofproblemsolving.com/wiki/index.php/Main_Page,"
+            "ARCHIVE_ALLOWED_PATH_PREFIXES=/wiki/index.php/,/community/c14_international_contests,/community/c16_national_and_regional_contests,/c/,/3/,/4/,/9/,/b/,/f/\n"
+            "ARCHIVE_START_URLS=https://artofproblemsolving.com/community/c14_international_contests,"
+            "https://artofproblemsolving.com/community/c16_national_and_regional_contests,"
+            "https://artofproblemsolving.com/wiki/index.php/Main_Page,"
             "https://artofproblemsolving.com/wiki/index.php/List_of_mathematics_competitions,"
             "https://artofproblemsolving.com/wiki/index.php/AMC_Problems_and_Solutions,"
             "https://artofproblemsolving.com/wiki/index.php/IMO_Problems_and_Solutions\n"
