@@ -255,6 +255,15 @@ input,select{background:#334155;border:1px solid #475569;color:#e2e8f0;padding:6
   </div>
 
   <div class="card">
+    <h2>🗑️ Delete Archive</h2>
+    <p style="font-size:12px;color:#64748b;margin-bottom:8px">Delete downloaded content from the server.</p>
+    <button class="btn btn-danger" onclick="deleteAll()">Delete ALL Archived Content</button>
+    <button class="btn btn-danger" onclick="deleteArchive()">Delete Archive Folder Only</button>
+    <button class="btn btn-danger" onclick="deleteDB()">Delete Database Only</button>
+    <pre id="delete-result"></pre>
+  </div>
+
+  <div class="card">
     <h2>Backup</h2>
     <button class="btn btn-ok" onclick="apiAction('backup-now')">Backup Now</button>
     <button class="btn btn-go" onclick="apiAction('backup-list')">List Backups</button>
@@ -411,6 +420,42 @@ login().then(ok => {
   if (ok) getStatus();
   else document.getElementById('status').innerHTML = 'Login failed — check console';
 });
+
+async function deleteAll() {
+  if (!confirm('DELETE ALL archived content?\\nThis deletes archive/ + data/*.db\\nThis cannot be undone!')) return;
+  document.getElementById('delete-result').innerHTML = 'Deleting...';
+  const d = await fetchAPI('/servers');
+  if (d.error || !d.length) { document.getElementById('delete-result').innerHTML = 'No server'; return; }
+  const r = await fetchAPI('/servers/'+d[0].id+'/terminal', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({command: 'rm -rf /opt/mathvault/archive/* /opt/mathvault/data/*.db 2>/dev/null; echo "All deleted"'})
+  });
+  document.getElementById('delete-result').innerHTML = '<pre>'+(r.stdout||r.stderr||'Done')+'</pre>';
+}
+
+async function deleteArchive() {
+  if (!confirm('Delete archive/ folder only?\\nDatabase kept.')) return;
+  document.getElementById('delete-result').innerHTML = 'Deleting archive...';
+  const d = await fetchAPI('/servers');
+  if (d.error || !d.length) { document.getElementById('delete-result').innerHTML = 'No server'; return; }
+  const r = await fetchAPI('/servers/'+d[0].id+'/terminal', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({command: 'rm -rf /opt/mathvault/archive/pages/* /opt/mathvault/archive/assets/* /opt/mathvault/archive/index/* 2>/dev/null; echo "Archive deleted"'})
+  });
+  document.getElementById('delete-result').innerHTML = '<pre>'+(r.stdout||r.stderr||'Done')+'</pre>';
+}
+
+async function deleteDB() {
+  if (!confirm('Delete database only?\\nArchive files kept.')) return;
+  document.getElementById('delete-result').innerHTML = 'Deleting DB...';
+  const d = await fetchAPI('/servers');
+  if (d.error || !d.length) { document.getElementById('delete-result').innerHTML = 'No server'; return; }
+  const r = await fetchAPI('/servers/'+d[0].id+'/terminal', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({command: 'rm -f /opt/mathvault/data/*.db /opt/mathvault/data/*.db-wal /opt/mathvault/data/*.db-shm 2>/dev/null; echo "DB deleted"'})
+  });
+  document.getElementById('delete-result').innerHTML = '<pre>'+(r.stdout||r.stderr||'Done')+'</pre>';
+}
 </script>
 </body>
 </html>"""
