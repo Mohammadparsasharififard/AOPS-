@@ -101,21 +101,25 @@ def seed_server():
     os.chdir(str(SM))
     os.environ["PYTHONPATH"] = str(SM)
 
-    # Set default master password if not set
+    # Set default master password (ALWAYS overwrite — no stale .env issues)
     env_file = SM / ".env"
-    content = env_file.read_text(encoding="utf-8")
-    has_hash = any(line.startswith("MASTER_PASSWORD_HASH=") and len(line.split("=",1)[1].strip()) > 0 for line in content.splitlines())
-    if not has_hash:
-        from crypto import generate_keypair, hash_master_password, save_keypair
-        pw = "mathvault2024"
-        sk, pk = generate_keypair(pw)
-        save_keypair(sk, pk, pw)
-        h = hash_master_password(pw)
-        with open(env_file, "a", encoding="utf-8") as f:
-            f.write(f"\nMASTER_PASSWORD_HASH={h}\n")
-        print(f"[setup] Master password: {pw}")
+    content = env_file.read_text(encoding="utf-8") if env_file.exists() else ""
+    
+    # Remove old MASTER_PASSWORD_HASH line
+    lines = [l for l in content.splitlines() if not l.startswith("MASTER_PASSWORD_HASH=")]
+    env_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    
+    # Always regenerate keypair + hash with default password
+    from crypto import generate_keypair, hash_master_password, save_keypair, encrypt_credential
+    pw = "mathvault2024"
+    sk, pk = generate_keypair(pw)
+    save_keypair(sk, pk, pw)
+    h = hash_master_password(pw)
+    with open(env_file, "a", encoding="utf-8") as f:
+        f.write(f"\nMASTER_PASSWORD_HASH={h}\n")
+    print(f"[setup] Master password: {pw}")
 
-    # CRITICAL: Clear settings cache so it re-reads .env with the hash
+    # Clear settings cache
     from config import get_settings
     get_settings.cache_clear()
     s = get_settings()
@@ -149,7 +153,10 @@ def seed_server():
             db.commit()
             print("[setup] Server registered: mp@192.168.1.150")
         else:
-            print("[setup] Server already exists")
+            # UPDATE password with current keypair (keypair regenerates each run)
+            existing.encrypted_password = encrypt_credential("Mp13911391!")
+            db.commit()
+            print("[setup] Server password updated with new keypair")
 
 # ============================================================
 # 3. Built-in Web UI (no Next.js — pure HTML served by FastAPI)
