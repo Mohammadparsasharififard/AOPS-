@@ -278,7 +278,7 @@ class CrawlScheduler:
             )
 
             # Download assets (in same run — small images only)
-            for asset_url in parsed.assets[:20]:  # cap per page
+            for asset_url in parsed.assets[:self.settings.crawl_max_assets_per_page]:
                 if not is_url_allowed_scheme(asset_url):
                     continue
                 asset_result = fetcher.get(asset_url)

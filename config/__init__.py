@@ -39,6 +39,10 @@ class Settings(BaseSettings):
     crawl_max_retries: int = 3
     crawl_user_agent: str = "MathVault-Archiver/1.0"
     crawl_respect_robots: bool = True
+    # Per-page asset download limit — how many images/PDFs/etc to fetch
+    # per single page (prevents downloading 100s of small icons on a
+    # complex page). Default: 50 (was hardcoded 20 in scheduler).
+    crawl_max_assets_per_page: int = 50
 
     # --- Sync ----------------------------------------------------------------
     sync_interval_hours: int = 2
