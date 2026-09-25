@@ -432,7 +432,9 @@ def _dry_run_crawl() -> None:
 @cli.command(name="retry-blocked")
 @click.option("--reason", default=None, help="Only retry URLs blocked with this reason (e.g. cloudflare_challenge, challenge_required)")
 @click.option("--limit", default=20, help="Max URLs to retry per run")
-def retry_blocked(reason: Optional[str], limit: int) -> None:
+@click.option("--url", default=None, help="Retry a single specific URL (exact match)")
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON (for API integration)")
+def retry_blocked(reason: Optional[str], limit: int, url: Optional[str], as_json: bool) -> None:
     """Retry fetching URLs that were previously blocked.
 
     Useful workflow:
@@ -468,126 +470,159 @@ def retry_blocked(reason: Optional[str], limit: int) -> None:
 
     with session_scope() as db:
         # Find blocked URLs to retry
-        stmt = select(BlockedUrl).order_by(BlockedUrl.last_attempted.desc().nulls_last())
-        if reason:
-            stmt = stmt.where(BlockedUrl.reason == reason)
-        stmt = stmt.limit(limit)
-        blocked = db.execute(stmt).scalars().all()
+        if url:
+            # Retry a single specific URL
+            blocked = db.execute(
+                select(BlockedUrl).where(BlockedUrl.url == url)
+            ).scalars().all()
+            if not blocked:
+                # URL not in blocked table — try to fetch directly
+                from database.models import Page
+                existing = db.execute(
+                    select(Page).where(Page.canonical_url == url)
+                ).scalar_one_or_none()
+                if existing:
+                    console.print(f"[green]URL already archived — nothing to retry.[/green]")
+                    return
+                # Create a temporary BlockedUrl entry to retry
+                from crawler.normalizer import canonicalize_url
+                canon = canonicalize_url(url)
+                temp = BlockedUrl(
+                    url=canon, canonical_url=canon, reason="manual_retry",
+                    detail="Manually triggered retry", retry_count=0,
+                )
+                db.add(temp)
+                db.flush()
+                blocked = [temp]
+        else:
+            stmt = select(BlockedUrl).order_by(BlockedUrl.last_attempted.desc().nulls_last())
+            if reason:
+                stmt = stmt.where(BlockedUrl.reason == reason)
+            stmt = stmt.limit(limit)
+            blocked = db.execute(stmt).scalars().all()
 
         if not blocked:
-            console.print("[green]No blocked URLs to retry.[/green]")
+            if as_json:
+                import json
+                click.echo(json.dumps({"success": 0, "still_blocked": 0, "failed": 0, "message": "No blocked URLs to retry"}))
+            else:
+                console.print("[green]No blocked URLs to retry.[/green]")
             return
 
-        console.print(f"[cyan]Found {len(blocked)} blocked URL(s) to retry.[/cyan]")
-        for b in blocked:
-            console.print(f"  - {b.url} (reason: {b.reason})")
+        if not as_json:
+            console.print(f"[cyan]Found {len(blocked)} blocked URL(s) to retry.[/cyan]")
+            for b in blocked:
+                console.print(f"  - {b.url} (reason: {b.reason})")
 
         # Build fetcher
         fetcher = build_fetcher(allowlist=al, authorization=auth)
-        console.print(f"[cyan]Using fetcher: {type(fetcher).__name__}[/cyan]")
-        console.print(f"[cyan]Headless: {getattr(fetcher, 'headless', 'N/A')}[/cyan]")
+        if not as_json:
+            console.print(f"[cyan]Using fetcher: {type(fetcher).__name__}[/cyan]")
+            console.print(f"[cyan]Headless: {getattr(fetcher, 'headless', 'N/A')}[/cyan]")
 
         storage = Storage(db)
+        success = 0
+        still_blocked = 0
+        failed = 0
+        results_list: list[dict] = []
 
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            console=console,
-            transient=True,
-        ) as progress:
-            task = progress.add_task(f"Retrying {len(blocked)} blocked URLs…", total=len(blocked))
-            with fetcher:
-                success = 0
-                still_blocked = 0
-                failed = 0
-                for b in blocked:
-                    progress.update(task, description=f"Retrying: {b.url[:60]}")
-                    result = fetcher.get(b.url)
-                    if result is None:
-                        failed += 1
-                        progress.console.print(f"  ✗ {b.url} — out of scope")
-                    elif result.error:
-                        failed += 1
-                        progress.console.print(f"  ✗ {b.url} — {result.error[:80]}")
-                    elif getattr(result, "challenge_required", False):
-                        still_blocked += 1
-                        progress.console.print(f"  ⚠ {b.url} — still requires challenge")
-                        # Update last_attempted
-                        b.last_attempted = datetime.now(timezone.utc)
-                        b.retry_count += 1
-                    elif result.status_code >= 400:
-                        # Re-check block reason
-                        block_reason = storage.detect_block_reason(
-                            result.status_code, result.content, result.content_type
-                        )
-                        if block_reason:
-                            b.last_attempted = datetime.now(timezone.utc)
-                            b.retry_count += 1
-                            b.reason = block_reason[0]
-                            b.detail = block_reason[1]
-                            b.http_status = result.status_code
-                            still_blocked += 1
-                            progress.console.print(f"  ⚠ {b.url} — still blocked: {block_reason[0]}")
-                        else:
-                            failed += 1
-                            progress.console.print(f"  ✗ {b.url} — HTTP {result.status_code}")
+        def _process_one(b):
+            """Process a single blocked URL. Returns (status, message)."""
+            result = fetcher.get(b.url)
+            if result is None:
+                return "failed", "out of scope"
+            if result.error:
+                return "failed", result.error[:200]
+            if getattr(result, "challenge_required", False):
+                b.last_attempted = datetime.now(timezone.utc)
+                b.retry_count += 1
+                return "blocked", "still requires challenge"
+            if result.status_code >= 400:
+                block_reason = storage.detect_block_reason(
+                    result.status_code, result.content, result.content_type
+                )
+                if block_reason:
+                    b.last_attempted = datetime.now(timezone.utc)
+                    b.retry_count += 1
+                    b.reason = block_reason[0]
+                    b.detail = block_reason[1]
+                    b.http_status = result.status_code
+                    return "blocked", f"still blocked: {block_reason[0]}"
+                return "failed", f"HTTP {result.status_code}"
+            # Success — store
+            try:
+                from crawler.storage import sanitize_html
+                if is_html_content_type(result.content_type):
+                    html_str = result.content.decode("utf-8", errors="replace")
+                    parsed = parse_html(html_str, base_url=result.final_url)
+                    clean_html = sanitize_html(parsed.html)
+                    page, status = storage.upsert_page(
+                        url=b.url, canonical=result.final_url,
+                        content_type=result.content_type, status_code=result.status_code,
+                        etag=result.etag, last_modified=result.last_modified,
+                        content_bytes=result.content, content_text=parsed.text,
+                        content_html=clean_html, is_complete=True,
+                    )
+                    storage.upsert_search_doc(
+                        doc_type="page", ref_id=page.id,
+                        title=parsed.title or b.url, body=parsed.text[:50000],
+                        url=b.url,
+                    )
+                    db.delete(b)
+                    return "success", "archived"
+                else:
+                    storage.upsert_asset(
+                        page_id=None, asset_url=b.url,
+                        content_bytes=result.content, content_type=result.content_type,
+                    )
+                    db.delete(b)
+                    return "success", "asset archived"
+            except Exception as e:
+                return "failed", f"storage error: {e}"
+
+        with fetcher:
+            for b in blocked:
+                if not as_json:
+                    console.print(f"  Retrying: {b.url[:70]}...")
+                status, msg = _process_one(b)
+                if status == "success":
+                    success += 1
+                    if as_json:
+                        results_list.append({"url": b.url, "status": "success", "message": msg})
                     else:
-                        # Successfully fetched — store as new page
-                        try:
-                            from crawler.storage import sanitize_html
-                            if is_html_content_type(result.content_type):
-                                html_str = result.content.decode("utf-8", errors="replace")
-                                parsed = parse_html(html_str, base_url=result.final_url)
-                                clean_html = sanitize_html(parsed.html)
-                                page, status = storage.upsert_page(
-                                    url=b.url,
-                                    canonical=result.final_url,
-                                    content_type=result.content_type,
-                                    status_code=result.status_code,
-                                    etag=result.etag,
-                                    last_modified=result.last_modified,
-                                    content_bytes=result.content,
-                                    content_text=parsed.text,
-                                    content_html=clean_html,
-                                    is_complete=True,
-                                )
-                                storage.upsert_search_doc(
-                                    doc_type="page",
-                                    ref_id=page.id,
-                                    title=parsed.title or b.url,
-                                    body=parsed.text[:50000],
-                                    url=b.url,
-                                )
-                                success += 1
-                                progress.console.print(f"  ✓ {b.url} — archived")
-                            else:
-                                # Non-HTML — store as asset
-                                storage.upsert_asset(
-                                    page_id=None,
-                                    asset_url=b.url,
-                                    content_bytes=result.content,
-                                    content_type=result.content_type,
-                                )
-                                success += 1
-                                progress.console.print(f"  ✓ {b.url} — asset archived")
-                            # Remove from blocked table
-                            db.delete(b)
-                        except Exception as e:
-                            failed += 1
-                            progress.console.print(f"  ✗ {b.url} — storage error: {e}")
-                    progress.update(task, advance=1)
-                progress.update(task, completed=True, description="Done")
+                        console.print(f"  [green]✓ {b.url} — {msg}[/green]")
+                elif status == "blocked":
+                    still_blocked += 1
+                    if as_json:
+                        results_list.append({"url": b.url, "status": "blocked", "message": msg})
+                    else:
+                        console.print(f"  [yellow]⚠ {b.url} — {msg}[/yellow]")
+                else:
+                    failed += 1
+                    if as_json:
+                        results_list.append({"url": b.url, "status": "failed", "message": msg})
+                    else:
+                        console.print(f"  [red]✗ {b.url} — {msg}[/red]")
 
         db.commit()
 
-    console.print()
-    console.print(f"[green]Successfully archived: {success}[/green]")
-    console.print(f"[yellow]Still blocked: {still_blocked}[/yellow]")
-    console.print(f"[red]Failed: {failed}[/red]")
-    if still_blocked > 0:
+    if as_json:
+        import json
+        click.echo(json.dumps({
+            "success": success,
+            "still_blocked": still_blocked,
+            "failed": failed,
+            "results": results_list,
+        }, indent=2))
+    else:
         console.print()
-        console.print("[yellow]Tip: Set browser.headless: false in source.yaml[/yellow]")
-        console.print("[yellow]and re-run this command to solve CAPTCHAs manually.[/yellow]")
+        console.print(f"[green]Successfully archived: {success}[/green]")
+        console.print(f"[yellow]Still blocked: {still_blocked}[/yellow]")
+        console.print(f"[red]Failed: {failed}[/red]")
+        if still_blocked > 0:
+            console.print()
+            console.print("[yellow]Tip: Set browser.headless: false in source.yaml[/yellow]")
+            console.print("[yellow]and re-run this command to solve CAPTCHAs manually.[/yellow]")
 
 
 @cli.command(name="validate-archive")
