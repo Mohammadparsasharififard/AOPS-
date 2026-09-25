@@ -31,6 +31,18 @@ class ParsedPage:
     assets: list[str] = field(default_factory=list)  # absolute asset URLs (img, a[href=.pdf])
     meta_description: Optional[str] = None
     language: Optional[str] = None
+    # Phase 3 — full navigation discovery
+    navbar_links: list[str] = field(default_factory=list)
+    sidebar_links: list[str] = field(default_factory=list)
+    breadcrumb_links: list[str] = field(default_factory=list)
+    tab_links: list[str] = field(default_factory=list)
+    pagination_links: list[str] = field(default_factory=list)
+    next_link: Optional[str] = None
+    prev_link: Optional[str] = None
+    stylesheet_links: list[str] = field(default_factory=list)
+    script_links: list[str] = field(default_factory=list)
+    iframe_links: list[str] = field(default_factory=list)
+    font_links: list[str] = field(default_factory=list)
 
 
 _BLOCK_TAGS = (
@@ -66,7 +78,40 @@ def parse_html(html: str, base_url: str) -> ParsedPage:
     # Language
     lang = soup.html.get("lang") if soup.html else None
 
-    # Text content — strip script/style/nav/header for cleaner extraction
+    # Pre-extract script/style/stylesheet links BEFORE decomposing them
+    script_links_pre: list[str] = []
+    for script in soup.find_all("script", src=True):
+        src = script["src"].strip()
+        if src:
+            absolute = urljoin(base_url, src)
+            if absolute not in script_links_pre:
+                script_links_pre.append(absolute)
+
+    stylesheet_links_pre: list[str] = []
+    for link in soup.find_all("link", rel=True):
+        rel = link.get("rel", [])
+        if isinstance(rel, list) and "stylesheet" in rel:
+            href = link.get("href", "").strip()
+            if href:
+                absolute = urljoin(base_url, href)
+                if absolute not in stylesheet_links_pre:
+                    stylesheet_links_pre.append(absolute)
+
+    iframe_links_pre: list[str] = []
+    for iframe in soup.find_all("iframe", src=True):
+        src = iframe["src"].strip()
+        if src and not src.startswith("data:"):
+            absolute = urljoin(base_url, src)
+            if absolute not in iframe_links_pre:
+                iframe_links_pre.append(absolute)
+
+    font_links_pre: list[str] = []
+    for link in soup.find_all("link", attrs={"as": "font"}, href=True):
+        absolute = urljoin(base_url, link["href"])
+        if absolute not in font_links_pre:
+            font_links_pre.append(absolute)
+
+    # Text content — strip script/style/noscript for cleaner text extraction
     for tag in soup(["script", "style", "noscript"]):
         tag.decompose()
 
@@ -120,6 +165,131 @@ def parse_html(html: str, base_url: str) -> ParsedPage:
             if full not in assets:
                 assets.append(full)
 
+    # === Phase 3: full navigation discovery (uses pre-extracted values
+    #              where appropriate to avoid losing links after decompose) ===
+
+    # Navbar links — typically <nav> or <header> <ul> structure
+    navbar_links: list[str] = []
+    for sel in ["nav", "header nav", ".navbar", "#navbar", ".main-nav"]:
+        nav_el = soup.select_one(sel)
+        if nav_el:
+            for a in nav_el.find_all("a", href=True):
+                href = a["href"].strip()
+                if not href or href.startswith("#"):
+                    continue
+                absolute = urljoin(base_url, href)
+                if "#" in absolute:
+                    absolute = absolute.split("#", 1)[0]
+                if absolute and absolute not in navbar_links:
+                    navbar_links.append(absolute)
+            if navbar_links:
+                break
+
+    # Sidebar links — typically <aside> or .sidebar / .menu
+    sidebar_links: list[str] = []
+    for sel in ["aside", ".sidebar", "#sidebar", ".side-nav", "#side", ".menu"]:
+        side_el = soup.select_one(sel)
+        if side_el:
+            for a in side_el.find_all("a", href=True):
+                href = a["href"].strip()
+                if not href or href.startswith("#"):
+                    continue
+                absolute = urljoin(base_url, href)
+                if "#" in absolute:
+                    absolute = absolute.split("#", 1)[0]
+                if absolute and absolute not in sidebar_links:
+                    sidebar_links.append(absolute)
+            if sidebar_links:
+                break
+
+    # Breadcrumb links — typically .breadcrumb / .breadcrumbs / nav.breadcrumb
+    breadcrumb_links: list[str] = []
+    for sel in [".breadcrumb", ".breadcrumbs", "nav.breadcrumb", "#breadcrumbs", ".breadcrumb-inner"]:
+        bc_el = soup.select_one(sel)
+        if bc_el:
+            for a in bc_el.find_all("a", href=True):
+                href = a["href"].strip()
+                if not href or href.startswith("#"):
+                    continue
+                absolute = urljoin(base_url, href)
+                if "#" in absolute:
+                    absolute = absolute.split("#", 1)[0]
+                if absolute and absolute not in breadcrumb_links:
+                    breadcrumb_links.append(absolute)
+            if breadcrumb_links:
+                break
+    # MediaWiki categories as breadcrumbs
+    if not breadcrumb_links:
+        catlinks = soup.select(".mw-normal-catlinks a")
+        for a in catlinks:
+            href = a.get("href", "").strip()
+            if href and not href.startswith("#"):
+                absolute = urljoin(base_url, href)
+                if absolute not in breadcrumb_links:
+                    breadcrumb_links.append(absolute)
+
+    # Tab links — MediaWiki vector-tabs, .nav-tabs, etc.
+    tab_links: list[str] = []
+    for sel in [".vector-tabs", ".nav-tabs", "#p-namespaces", ".tabs", ".mw-body-content .tabs"]:
+        tabs_el = soup.select_one(sel)
+        if tabs_el:
+            for a in tabs_el.find_all("a", href=True):
+                href = a["href"].strip()
+                if not href or href.startswith("#"):
+                    continue
+                absolute = urljoin(base_url, href)
+                if "#" in absolute:
+                    absolute = absolute.split("#", 1)[0]
+                if absolute and absolute not in tab_links:
+                    tab_links.append(absolute)
+            if tab_links:
+                break
+
+    # Pagination — explicit pagination links
+    pagination_links: list[str] = []
+    for sel in ["a.next", 'a[rel="next"]', "a.prevnext", ".pagination a", ".pager a",
+                "a.next-page", "a.prev-page", ".page-link"]:
+        for a in soup.select(sel)[:10]:
+            href = a.get("href", "").strip()
+            if not href or href.startswith("#"):
+                continue
+            absolute = urljoin(base_url, href)
+            if absolute not in pagination_links:
+                pagination_links.append(absolute)
+    # MediaWiki pagination patterns
+    for a in soup.find_all("a", href=True):
+        href = a["href"].lower()
+        if "offset=" in href or "&limit=" in href or "page=" in href:
+            absolute = urljoin(base_url, a["href"])
+            if absolute not in pagination_links:
+                pagination_links.append(absolute)
+
+    # Next/Previous navigation
+    next_link: Optional[str] = None
+    prev_link: Optional[str] = None
+    for a in soup.find_all("a", href=True):
+        text = a.get_text(strip=True).lower()
+        if not next_link and text in ("next", "next page", "→", ">"):
+            next_link = urljoin(base_url, a["href"])
+        elif not prev_link and text in ("previous", "prev", "previous page", "←", "<"):
+            prev_link = urljoin(base_url, a["href"])
+        # Also check rel attributes
+        rel = a.get("rel", [])
+        if isinstance(rel, list):
+            if "next" in rel and not next_link:
+                next_link = urljoin(base_url, a["href"])
+            elif "prev" in rel and not prev_link:
+                prev_link = urljoin(base_url, a["href"])
+        if next_link and prev_link:
+            break
+
+    # Stylesheets / scripts / iframes / fonts — pre-extracted BEFORE
+    # decompose() so we don't lose them
+    stylesheet_links = stylesheet_links_pre
+    script_links = script_links_pre
+    iframe_links = iframe_links_pre
+    font_links = font_links_pre
+
     return ParsedPage(
         title=title,
         text=text,
@@ -128,6 +298,17 @@ def parse_html(html: str, base_url: str) -> ParsedPage:
         assets=assets,
         meta_description=meta_desc,
         language=lang,
+        navbar_links=navbar_links,
+        sidebar_links=sidebar_links,
+        breadcrumb_links=breadcrumb_links,
+        tab_links=tab_links,
+        pagination_links=pagination_links,
+        next_link=next_link,
+        prev_link=prev_link,
+        stylesheet_links=stylesheet_links,
+        script_links=script_links,
+        iframe_links=iframe_links,
+        font_links=font_links,
     )
 
 

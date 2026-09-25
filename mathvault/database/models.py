@@ -469,3 +469,130 @@ class SearchDoc(Base):
     __table_args__ = (
         UniqueConstraint("doc_type", "ref_id", name="uq_search_doc_ref"),
     )
+
+
+# =============================================================================
+# Site Graph — typed relationships between nodes (resources, pages, etc.)
+# =============================================================================
+
+class SiteNode(Base):
+    """A node in the site graph.
+
+    A node represents any resource the crawler has discovered or archived:
+    a domain, section, contest, year, round, problem set, problem,
+    solution, resource, discussion, thread, post, reply, asset, etc.
+
+    Relationships are stored separately in SiteEdge (typed, directional).
+    """
+    __tablename__ = "site_node"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_uuid)
+    # Node type — drives semantic interpretation
+    node_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    # domain | section | contest | year | round | problem_set | problem |
+    # solution | resource | discussion | thread | post | reply | asset | page
+
+    # Display + identifiers
+    name: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    slug: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+
+    # Source URL (canonical) — null for synthetic nodes (e.g. "domain" node)
+    source_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # Local archive URL — set by Local URL Mapping layer
+    local_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    # Reference to the corresponding semantic entity (if any)
+    page_id: Mapped[Optional[str]] = mapped_column(ForeignKey("page.id"), nullable=True)
+    asset_id: Mapped[Optional[str]] = mapped_column(ForeignKey("asset.id"), nullable=True)
+    contest_id: Mapped[Optional[str]] = mapped_column(ForeignKey("contest.id"), nullable=True)
+    contest_year_id: Mapped[Optional[str]] = mapped_column(ForeignKey("contest_year.id"), nullable=True)
+    problem_id: Mapped[Optional[str]] = mapped_column(ForeignKey("problem.id"), nullable=True)
+    problem_set_id: Mapped[Optional[str]] = mapped_column(ForeignKey("problem_set.id"), nullable=True)
+    discussion_id: Mapped[Optional[str]] = mapped_column(ForeignKey("discussion.id"), nullable=True)
+    post_id: Mapped[Optional[str]] = mapped_column(ForeignKey("post.id"), nullable=True)
+
+    # Status — distinguishes ARCHIVED from BLOCKED/FAILED/SKIPPED/NOT_VERIFIED
+    status: Mapped[str] = mapped_column(String(20), default="not_verified")
+    # not_verified | discovered | archived | unchanged | failed | blocked | skipped
+
+    # Metadata
+    first_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    last_seen: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_archived: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    depth: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("node_type", "source_url", name="uq_site_node_type_url"),
+        Index("ix_site_node_type", "node_type"),
+        Index("ix_site_node_slug", "slug"),
+        Index("ix_site_node_source_url", "source_url"),
+        Index("ix_site_node_status", "status"),
+        Index("ix_site_node_status_type", "status", "node_type"),
+        Index("ix_site_node_first_seen", "first_seen"),
+    )
+
+
+class SiteEdge(Base):
+    """A typed, directional relationship between two SiteNodes.
+
+    Edge types (semantic):
+    - parent → child : hierarchical (contest → year, problem → discussion)
+    - next → prev : pagination order (problem 2 → problem 3)
+    - related : non-hierarchical (problem ↔ related resource)
+    - belongs_to : reverse of parent→child (problem belongs_to contest_year)
+    - has_problem, has_solution, has_resource, has_discussion, has_post
+    - replies_to : post → parent post
+    - references : arbitrary cross-link
+    - contains_asset : page → asset
+    """
+    __tablename__ = "site_edge"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_uuid)
+    source_node_id: Mapped[str] = mapped_column(
+        ForeignKey("site_node.id", ondelete="CASCADE"), nullable=False
+    )
+    target_node_id: Mapped[str] = mapped_column(
+        ForeignKey("site_node.id", ondelete="CASCADE"), nullable=False
+    )
+    edge_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    # parent | child | next | prev | related | belongs_to | has_problem |
+    # has_solution | has_resource | has_discussion | has_post | replies_to |
+    # references | contains_asset
+    weight: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  # for ordering
+    discovered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("source_node_id", "target_node_id", "edge_type", name="uq_site_edge"),
+        Index("ix_site_edge_source", "source_node_id"),
+        Index("ix_site_edge_target", "target_node_id"),
+        Index("ix_site_edge_type", "edge_type"),
+        Index("ix_site_edge_type_source", "edge_type", "source_node_id"),
+        Index("ix_site_edge_type_target", "edge_type", "target_node_id"),
+    )
+
+
+class LocalUrlMapping(Base):
+    """Maps every archived source URL to a local canonical URL.
+
+    Used by the offline navigation layer to rewrite internal links so the
+    archived snapshot is browsable offline (no external requests).
+
+    If local_url is null, the source URL was NOT archived — the frontend
+    shows "This content is not available offline."
+    """
+    __tablename__ = "local_url_mapping"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_uuid)
+    source_url: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    canonical_source_url: Mapped[str] = mapped_column(Text, nullable=False)
+    local_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # /archive/...
+    node_id: Mapped[Optional[str]] = mapped_column(ForeignKey("site_node.id"), nullable=True)
+    archived: Mapped[bool] = mapped_column(Boolean, default=False)
+    last_updated: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+    __table_args__ = (
+        Index("ix_local_url_mapping_source", "source_url"),
+        Index("ix_local_url_mapping_canon", "canonical_source_url"),
+        Index("ix_local_url_mapping_archived", "archived"),
+        Index("ix_local_url_mapping_node", "node_id"),
+    )

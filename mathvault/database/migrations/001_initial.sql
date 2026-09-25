@@ -234,5 +234,66 @@ CREATE TABLE IF NOT EXISTS search_doc (
 CREATE INDEX IF NOT EXISTS ix_search_doc_type ON search_doc (doc_type);
 CREATE INDEX IF NOT EXISTS ix_search_doc_ref  ON search_doc (ref_id);
 
+-- Site Graph ------------------------------------------------------------------
+-- Each resource the crawler discovers or archives is a SiteNode.
+-- Typed directional relationships are stored in SiteEdge.
+-- LocalUrlMapping tracks source → local URL for offline navigation.
+
+CREATE TABLE IF NOT EXISTS site_node (
+    id               VARCHAR(32) PRIMARY KEY,
+    node_type        VARCHAR(50) NOT NULL,
+    name             VARCHAR(500),
+    slug             VARCHAR(500),
+    source_url       TEXT,
+    local_url        TEXT,
+    page_id          VARCHAR(32) REFERENCES page(id),
+    asset_id         VARCHAR(32) REFERENCES asset(id),
+    contest_id       VARCHAR(32) REFERENCES contest(id),
+    contest_year_id  VARCHAR(32) REFERENCES contest_year(id),
+    problem_id       VARCHAR(32) REFERENCES problem(id),
+    problem_set_id   VARCHAR(32) REFERENCES problem_set(id),
+    discussion_id    VARCHAR(32) REFERENCES discussion(id),
+    post_id          VARCHAR(32) REFERENCES post(id),
+    status           VARCHAR(20) NOT NULL DEFAULT 'not_verified',
+    first_seen       TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    last_seen        TIMESTAMP WITH TIME ZONE,
+    last_archived    TIMESTAMP WITH TIME ZONE,
+    depth            INTEGER,
+    UNIQUE (node_type, source_url)
+);
+CREATE INDEX IF NOT EXISTS ix_site_node_type       ON site_node (node_type);
+CREATE INDEX IF NOT EXISTS ix_site_node_slug      ON site_node (slug);
+CREATE INDEX IF NOT EXISTS ix_site_node_source_url ON site_node (source_url);
+CREATE INDEX IF NOT EXISTS ix_site_node_status     ON site_node (status);
+CREATE INDEX IF NOT EXISTS ix_site_node_status_type ON site_node (status, node_type);
+
+CREATE TABLE IF NOT EXISTS site_edge (
+    id              VARCHAR(32) PRIMARY KEY,
+    source_node_id  VARCHAR(32) NOT NULL REFERENCES site_node(id) ON DELETE CASCADE,
+    target_node_id  VARCHAR(32) NOT NULL REFERENCES site_node(id) ON DELETE CASCADE,
+    edge_type       VARCHAR(50) NOT NULL,
+    weight          INTEGER,
+    discovered_at   TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (source_node_id, target_node_id, edge_type)
+);
+CREATE INDEX IF NOT EXISTS ix_site_edge_source     ON site_edge (source_node_id);
+CREATE INDEX IF NOT EXISTS ix_site_edge_target     ON site_edge (target_node_id);
+CREATE INDEX IF NOT EXISTS ix_site_edge_type       ON site_edge (edge_type);
+CREATE INDEX IF NOT EXISTS ix_site_edge_type_source ON site_edge (edge_type, source_node_id);
+CREATE INDEX IF NOT EXISTS ix_site_edge_type_target ON site_edge (edge_type, target_node_id);
+
+CREATE TABLE IF NOT EXISTS local_url_mapping (
+    id                   VARCHAR(32) PRIMARY KEY,
+    source_url           TEXT NOT NULL UNIQUE,
+    canonical_source_url TEXT NOT NULL,
+    local_url            TEXT,
+    node_id              VARCHAR(32) REFERENCES site_node(id),
+    archived             BOOLEAN NOT NULL DEFAULT FALSE,
+    last_updated         TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS ix_local_url_mapping_source   ON local_url_mapping (source_url);
+CREATE INDEX IF NOT EXISTS ix_local_url_mapping_canon    ON local_url_mapping (canonical_source_url);
+CREATE INDEX IF NOT EXISTS ix_local_url_mapping_archived ON local_url_mapping (archived);
+
 -- SQLite FTS5 virtual table (no-op on PostgreSQL)
 -- Created programmatically in database/session._init_sqlite_fts()
