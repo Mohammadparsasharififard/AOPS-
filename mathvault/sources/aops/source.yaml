@@ -77,30 +77,66 @@ browser:
 
 discovery:
   start_urls:
-    # --- General navigation ---
+    # --- General navigation (5) ---
     - https://artofproblemsolving.com/wiki/index.php/Main_Page
-
-    # --- Master list of ALL competitions ---
     - https://artofproblemsolving.com/wiki/index.php/List_of_mathematics_competitions
+    - https://artofproblemsolving.com/wiki/index.php/List_of_international_mathematics_competitions
+    - https://artofproblemsolving.com/wiki/index.php/List_of_regional_mathematics_competitions
+    - https://artofproblemsolving.com/wiki/index.php/Mathematical_olympiads
 
-    # --- INTERNATIONAL competitions ---
+    # --- INTERNATIONAL competitions (9) ---
     - https://artofproblemsolving.com/wiki/index.php/IMO_Problems_and_Solutions
     - https://artofproblemsolving.com/wiki/index.php/APMO_Problems_and_Solutions
     - https://artofproblemsolving.com/wiki/index.php/EGMO_Problems
     - https://artofproblemsolving.com/wiki/index.php/RMM_Problems
     - https://artofproblemsolving.com/wiki/index.php/IMC_Problems
+    - https://artofproblemsolving.com/wiki/index.php/International_Mathematics_Olympiad
+    - https://artofproblemsolving.com/wiki/index.php/Tournament_of_Towns
+    - https://artofproblemsolving.com/wiki/index.php/Mathematical_Kangaroo
+    - https://artofproblemsolving.com/wiki/index.php/Purple_Comet!_Math_Meet
 
-    # --- USA national competitions ---
+    # --- USA national competitions (10) ---
     - https://artofproblemsolving.com/wiki/index.php/AMC_Problems_and_Solutions
     - https://artofproblemsolving.com/wiki/index.php/AIME_Problems_and_Solutions
     - https://artofproblemsolving.com/wiki/index.php/USAMO_Problems_and_Solutions
     - https://artofproblemsolving.com/wiki/index.php/USA_TST_Problems
     - https://artofproblemsolving.com/wiki/index.php/USA_JMO_Problems
+    - https://artofproblemsolving.com/wiki/index.php/ARML_Problems
+    - https://artofproblemsolving.com/wiki/index.php/Mandelbrot_Competition
+    - https://artofproblemsolving.com/wiki/index.php/Putnam_Competition_Problems
+    - https://artofproblemsolving.com/wiki/index.php/HMMT_Problems
+    - https://artofproblemsolving.com/wiki/index.php/PUMaC
 
-    # --- Other national competitions ---
+    # --- Other national competitions (3) ---
     - https://artofproblemsolving.com/wiki/index.php/BMO_Problems
     - https://artofproblemsolving.com/wiki/index.php/CMO_Problems
-    - https://artofproblemsolving.com/wiki/index.php/ARML_Problems
+    - https://artofproblemsolving.com/wiki/index.php/COMC_Problems
+
+    # --- Country/Regional index pages (24) ---
+    - https://artofproblemsolving.com/wiki/index.php/List_of_Canada_mathematics_competitions
+    - https://artofproblemsolving.com/wiki/index.php/List_of_China_mathematics_competitions
+    - https://artofproblemsolving.com/wiki/index.php/United_Kingdom_mathematics_competitions
+    - https://artofproblemsolving.com/wiki/index.php/India_mathematics_competitions
+    - https://artofproblemsolving.com/wiki/index.php/Australia_mathematics_competitions
+    - https://artofproblemsolving.com/wiki/index.php/Brazil_mathematics_competitions
+    - https://artofproblemsolving.com/wiki/index.php/Singapore_mathematics_competitions
+    - https://artofproblemsolving.com/wiki/index.php/Korean_mathematics_competitions
+    - https://artofproblemsolving.com/wiki/index.php/Spain_mathematics_competitions
+    - https://artofproblemsolving.com/wiki/index.php/Mexico_mathematics_competitions
+    - https://artofproblemsolving.com/wiki/index.php/Argentina_mathematics_competitions
+    - https://artofproblemsolving.com/wiki/index.php/Belgium_mathematics_competitions
+    - https://artofproblemsolving.com/wiki/index.php/Hungary_mathematics_competitions
+    - https://artofproblemsolving.com/wiki/index.php/Indonesia_mathematics_competitions
+    - https://artofproblemsolving.com/wiki/index.php/Ireland_mathematics_competitions
+    - https://artofproblemsolving.com/wiki/index.php/Netherlands_mathematics_competitions
+    - https://artofproblemsolving.com/wiki/index.php/Pakistan_mathematics_competitions
+    - https://artofproblemsolving.com/wiki/index.php/Peru_mathematics_competitions
+    - https://artofproblemsolving.com/wiki/index.php/Cyprus_mathematics_competitions
+    - https://artofproblemsolving.com/wiki/index.php/Bangladesh_mathematics_competition
+    - https://artofproblemsolving.com/wiki/index.php/List_of_United_States_elementary_school_mathematics_competitions
+    - https://artofproblemsolving.com/wiki/index.php/List_of_United_States_middle_school_mathematics_competitions
+    - https://artofproblemsolving.com/wiki/index.php/List_of_United_States_high_school_mathematics_competitions
+    - https://artofproblemsolving.com/wiki/index.php/List_of_United_States_college_mathematics_competitions
 
   max_depth: 4
   max_pages_per_run: 500
