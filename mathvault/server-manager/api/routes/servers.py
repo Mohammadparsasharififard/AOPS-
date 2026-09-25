@@ -421,6 +421,131 @@ async def rollback_deployment(
     }
 
 
+# --- Blocked/Failed URLs Panel (Phase 3) ------------------------------
+
+@router.get("/{server_id}/blocked-urls", dependencies=[Depends(require_session)])
+async def list_blocked_urls_route(
+    server_id: str, request: Request, db: Session = Depends(get_db),
+) -> dict:
+    """List blocked URLs from the remote MathVault instance."""
+    s = db.get(Server, server_id)
+    if not s:
+        raise HTTPException(404, "Server not found")
+    pw = _get_master_password(request)
+    # Find the deploy path from deployments
+    deploy_path = "/opt/mathvault"
+    deps = db.execute(select(Deployment).where(Deployment.server_id == server_id)).scalars().all()
+    if deps:
+        deploy_path = deps[0].deploy_path
+    result = ssh_service.list_blocked_urls(db, s, pw, deploy_path)
+    return {
+        "exit_code": result.exit_code,
+        "output": result.stdout,
+    }
+
+
+@router.post("/{server_id}/blocked-urls/retry", dependencies=[Depends(require_session)])
+async def retry_blocked_urls_route(
+    server_id: str, req: Request, request: Request, db: Session = Depends(get_db),
+) -> dict:
+    """Retry all blocked URLs on the remote MathVault instance."""
+    s = db.get(Server, server_id)
+    if not s:
+        raise HTTPException(404, "Server not found")
+    pw = _get_master_password(request)
+    deploy_path = "/opt/mathvault"
+    deps = db.execute(select(Deployment).where(Deployment.server_id == server_id)).scalars().all()
+    if deps:
+        deploy_path = deps[0].deploy_path
+    body = await request.json()
+    reason = body.get("reason") if body else None
+    result = ssh_service.retry_all_blocked(db, s, pw, reason, deploy_path)
+    return {
+        "exit_code": result.exit_code,
+        "output": result.stdout,
+    }
+
+
+@router.post("/{server_id}/blocked-urls/{url:path}/retry", dependencies=[Depends(require_session)])
+async def retry_single_url_route(
+    server_id: str, url: str, request: Request, db: Session = Depends(get_db),
+) -> dict:
+    """Retry a single blocked URL on the remote MathVault instance."""
+    s = db.get(Server, server_id)
+    if not s:
+        raise HTTPException(404, "Server not found")
+    pw = _get_master_password(request)
+    deploy_path = "/opt/mathvault"
+    deps = db.execute(select(Deployment).where(Deployment.server_id == server_id)).scalars().all()
+    if deps:
+        deploy_path = deps[0].deploy_path
+    result = ssh_service.retry_single_url(db, s, pw, url, deploy_path)
+    return {
+        "exit_code": result.exit_code,
+        "output": result.stdout,
+    }
+
+
+@router.get("/{server_id}/crawl-stats", dependencies=[Depends(require_session)])
+async def get_crawl_stats_route(
+    server_id: str, request: Request, db: Session = Depends(get_db),
+) -> dict:
+    """Get crawl statistics from the remote MathVault instance."""
+    s = db.get(Server, server_id)
+    if not s:
+        raise HTTPException(404, "Server not found")
+    pw = _get_master_password(request)
+    deploy_path = "/opt/mathvault"
+    deps = db.execute(select(Deployment).where(Deployment.server_id == server_id)).scalars().all()
+    if deps:
+        deploy_path = deps[0].deploy_path
+    result = ssh_service.get_crawl_stats(db, s, pw, deploy_path)
+    return {
+        "exit_code": result.exit_code,
+        "output": result.stdout,
+    }
+
+
+@router.get("/{server_id}/validate-archive", dependencies=[Depends(require_session)])
+async def validate_archive_route(
+    server_id: str, request: Request, db: Session = Depends(get_db),
+) -> dict:
+    """Run validate-archive on the remote MathVault instance."""
+    s = db.get(Server, server_id)
+    if not s:
+        raise HTTPException(404, "Server not found")
+    pw = _get_master_password(request)
+    deploy_path = "/opt/mathvault"
+    deps = db.execute(select(Deployment).where(Deployment.server_id == server_id)).scalars().all()
+    if deps:
+        deploy_path = deps[0].deploy_path
+    result = ssh_service.validate_archive_remote(db, s, pw, deploy_path)
+    return {
+        "exit_code": result.exit_code,
+        "output": result.stdout,
+    }
+
+
+@router.get("/{server_id}/offline-test", dependencies=[Depends(require_session)])
+async def offline_test_route(
+    server_id: str, request: Request, db: Session = Depends(get_db),
+) -> dict:
+    """Run offline-test on the remote MathVault instance."""
+    s = db.get(Server, server_id)
+    if not s:
+        raise HTTPException(404, "Server not found")
+    pw = _get_master_password(request)
+    deploy_path = "/opt/mathvault"
+    deps = db.execute(select(Deployment).where(Deployment.server_id == server_id)).scalars().all()
+    if deps:
+        deploy_path = deps[0].deploy_path
+    result = ssh_service.offline_test_remote(db, s, pw, deploy_path)
+    return {
+        "exit_code": result.exit_code,
+        "output": result.stdout,
+    }
+
+
 @router.post("/{server_id}/test", dependencies=[Depends(require_session)])
 async def test_connection(server_id: str, request: Request, db: Session = Depends(get_db)) -> dict:
     s = db.get(Server, server_id)

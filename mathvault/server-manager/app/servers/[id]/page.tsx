@@ -72,16 +72,20 @@ export default function ServerDetailPage() {
       </div>
 
       <div className="flex gap-2 border-b border-slate-800 pb-2">
-        {(["status", "deployments", "services", "console"] as const).map(t => (
+        {(["status", "deployments", "services", "blocked", "console"] as const).map(t => (
           <button
             key={t}
             onClick={() => {
+              if (t === "blocked") {
+                window.location.href = `/servers/${params?.id}/blocked`;
+                return;
+              }
               setTab(t);
               if (t === "services") refreshServices();
             }}
             className={`px-3 py-1.5 rounded text-sm ${tab === t ? "bg-slate-800 font-medium" : "hover:bg-slate-900"}`}
           >
-            {t.charAt(0).toUpperCase() + t.slice(1)}
+            {t === "blocked" ? "⚠ Blocked" : t.charAt(0).toUpperCase() + t.slice(1)}
           </button>
         ))}
       </div>

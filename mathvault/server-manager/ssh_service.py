@@ -464,3 +464,72 @@ def list_services(db: Session, server: Server, master_password: str) -> CommandR
         db, server, master_password,
         "systemctl list-units --type=service --state=running --no-pager --no-legend | head -40",
     )
+
+
+# --- MathVault blocked/failed URLs management (Phase 2) ---------------
+
+def list_blocked_urls(db: Session, server: Server, master_password: str,
+                      deploy_path: str = "/opt/mathvault") -> CommandResult:
+    """List blocked URLs from the remote MathVault instance via SSH.
+
+    Runs `mathvault coverage --json` on the server and returns the output.
+    """
+    cmd = f"cd {shlex.quote(deploy_path)} && ./.venv/bin/python -m cli.mathvault coverage 2>&1"
+    return run_command(db, server, master_password, cmd, timeout=30)
+
+
+def retry_single_url(db: Session, server: Server, master_password: str,
+                      url: str, deploy_path: str = "/opt/mathvault") -> CommandResult:
+    """Retry a single blocked URL on the remote MathVault instance.
+
+    Runs `mathvault retry-blocked --url <URL> --json` on the server.
+    Returns JSON output with success/blocked/failed status.
+    """
+    # URL is passed as argument — shlex.quote it to prevent injection
+    cmd = (
+        f"cd {shlex.quote(deploy_path)} && "
+        f"./.venv/bin/python -m cli.mathvault retry-blocked "
+        f"--url {shlex.quote(url)} --json 2>&1"
+    )
+    return run_command(db, server, master_password, cmd, timeout=300)
+
+
+def retry_all_blocked(db: Session, server: Server, master_password: str,
+                      reason: Optional[str] = None,
+                      deploy_path: str = "/opt/mathvault") -> CommandResult:
+    """Retry all blocked URLs on the remote MathVault instance.
+
+    Runs `mathvault retry-blocked --json [--reason X]` on the server.
+    """
+    cmd = (
+        f"cd {shlex.quote(deploy_path)} && "
+        f"./.venv/bin/python -m cli.mathvault retry-blocked --json"
+    )
+    if reason:
+        cmd += f" --reason {shlex.quote(reason)}"
+    cmd += " 2>&1"
+    return run_command(db, server, master_password, cmd, timeout=600)
+
+
+def get_crawl_stats(db: Session, server: Server, master_password: str,
+                    deploy_path: str = "/opt/mathvault") -> CommandResult:
+    """Get crawl statistics from the remote MathVault instance.
+
+    Runs `mathvault coverage` on the server and returns the output.
+    """
+    cmd = f"cd {shlex.quote(deploy_path)} && ./.venv/bin/python -m cli.mathvault coverage 2>&1"
+    return run_command(db, server, master_password, cmd, timeout=30)
+
+
+def validate_archive_remote(db: Session, server: Server, master_password: str,
+                             deploy_path: str = "/opt/mathvault") -> CommandResult:
+    """Run `mathvault validate-archive` on the remote server."""
+    cmd = f"cd {shlex.quote(deploy_path)} && ./.venv/bin/python -m cli.mathvault validate-archive 2>&1"
+    return run_command(db, server, master_password, cmd, timeout=60)
+
+
+def offline_test_remote(db: Session, server: Server, master_password: str,
+                         deploy_path: str = "/opt/mathvault") -> CommandResult:
+    """Run `mathvault offline-test` on the remote server."""
+    cmd = f"cd {shlex.quote(deploy_path)} && ./.venv/bin/python -m cli.mathvault offline-test 2>&1"
+    return run_command(db, server, master_password, cmd, timeout=60)
