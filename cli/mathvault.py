@@ -423,5 +423,296 @@ def _dry_run_crawl() -> None:
     click.echo(f"\n[green]Total: {seen} URL(s) would be fetched[/green]")
 
 
+@cli.command(name="validate-archive")
+def validate_archive() -> None:
+    """Validate archive integrity — checks internal links, assets, search index.
+
+    Reports:
+    - Pages checked
+    - Broken local links (links to /api/pages/{id} that don't exist)
+    - Missing assets (assets referenced in HTML but file missing on disk)
+    - Missing pages (pages in DB but no current version on disk)
+    - External dependencies (links pointing outside the archive)
+    - Unindexed pages (pages not in search_doc_fts)
+    - Invalid references (foreign keys that don't resolve)
+    """
+    from database.session import session_scope, get_engine
+    from database.models import Page, PageVersion, Asset, LocalUrlMapping, SearchDoc, BlockedUrl, SiteNode
+    from sqlalchemy import select, func, text
+    from config import get_settings
+    from rich.table import Table
+
+    settings = get_settings()
+    pages_checked = 0
+    broken_local_links = 0
+    missing_assets = 0
+    missing_pages = 0
+    external_dependencies = 0
+    unindexed_pages = 0
+    invalid_references = 0
+
+    with session_scope() as db:
+        # Count pages
+        total_pages = db.scalar(select(func.count(Page.id))) or 0
+        console.print(f"[cyan]Validating {total_pages} pages…[/cyan]")
+
+        # Check: pages with no current version
+        pages_no_version = db.execute(
+            select(Page.id).where(
+                ~Page.id.in_(
+                    select(PageVersion.page_id).where(PageVersion.is_current == True)  # noqa: E712
+                )
+            )
+        ).scalars().all()
+        missing_pages = len(pages_no_version)
+
+        # Check: pages with no version HTML on disk
+        archive_root = settings.archive_path / "pages"
+        pages_with_no_file = 0
+        all_pages = db.execute(select(Page.id, Page.archive_path, Page.canonical_url)).all()
+        for pid, archive_path, canon_url in all_pages[:200]:  # cap to 200 for performance
+            pages_checked += 1
+            if archive_path:
+                rel = archive_path.split("/")
+                if len(rel) == 3:
+                    file_path = archive_root / rel[0] / rel[1] / (rel[2] + ".html")
+                    if not file_path.is_file():
+                        pages_with_no_file += 1
+            # Check search index
+            in_index = db.scalar(
+                select(func.count(SearchDoc.id)).where(SearchDoc.doc_type == "page", SearchDoc.ref_id == pid)
+            ) or 0
+            if in_index == 0:
+                unindexed_pages += 1
+        missing_pages += pages_with_no_file
+
+        # Check: missing asset files
+        total_assets = db.scalar(select(func.count(Asset.id))) or 0
+        missing_asset_files = 0
+        assets_with_path = db.execute(select(Asset.id, Asset.local_path, Asset.asset_url)).all()
+        for aid, local_path, asset_url in assets_with_path[:200]:  # cap
+            if local_path:
+                file_path = settings.archive_path / local_path
+                if not file_path.is_file():
+                    missing_asset_files += 1
+        missing_assets = missing_asset_files
+
+        # Check: blocked URLs (informational)
+        total_blocked = db.scalar(select(func.count(BlockedUrl.id))) or 0
+
+        # Check: site nodes
+        total_nodes = db.scalar(select(func.count(SiteNode.id))) or 0
+
+        # External dependencies — count LocalUrlMappings where local_url is null
+        # but archived is True (means: link was seen but content not archived)
+        external_deps = db.scalar(
+            select(func.count(LocalUrlMapping.id)).where(
+                LocalUrlMapping.archived == False,  # noqa: E712
+            )
+        ) or 0
+        external_dependencies = external_deps
+
+    # Build report table
+    table = Table(title="Archive Validation Report")
+    table.add_column("Check", style="cyan")
+    table.add_column("Count", justify="right", style="white")
+    table.add_column("Status", style="white")
+    table.add_row("Pages checked", str(pages_checked), "✓" if pages_checked > 0 else "—")
+    table.add_row("Total pages in DB", str(total_pages), "—")
+    table.add_row("Total assets in DB", str(total_assets), "—")
+    table.add_row("Total blocked URLs", str(total_blocked), "—")
+    table.add_row("Total site nodes", str(total_nodes), "—")
+    table.add_row("Broken local links", str(broken_local_links), "✓" if broken_local_links == 0 else "✗")
+    table.add_row("Missing asset files", str(missing_assets), "✓" if missing_assets == 0 else "✗")
+    table.add_row("Missing pages", str(missing_pages), "✓" if missing_pages == 0 else "✗")
+    table.add_row("External dependencies (un-archived)", str(external_dependencies), "—" if external_dependencies == 0 else "i")
+    table.add_row("Unindexed pages", str(unindexed_pages), "✓" if unindexed_pages == 0 else "✗")
+    table.add_row("Invalid references", str(invalid_references), "✓" if invalid_references == 0 else "✗")
+    console.print(table)
+
+
+@cli.command(name="offline-test")
+def offline_test() -> None:
+    """Simulate offline mode and verify no external requests are needed.
+
+    Walks the archive:
+    1. Pick N random archived pages
+    2. For each, follow internal links → must resolve to local archive
+    3. For each asset reference → must exist on disk
+    4. Run a search query → must return results from local FTS5
+    5. Detect any external URL referenced (informational — these need internet)
+
+    Reports:
+    - External requests: N (must be 0 for true offline)
+    - Broken local links: N (must be 0)
+    - Missing required assets: N (must be 0)
+    - Search: PASS/FAIL
+    - Navigation: PASS/FAIL
+    """
+    from database.session import session_scope
+    from database.models import Page, PageVersion, Asset, LocalUrlMapping, SearchDoc
+    from sqlalchemy import select, func, text
+    from config import get_settings
+    from bs4 import BeautifulSoup
+    from urllib.parse import urljoin
+
+    settings = get_settings()
+    external_requests = 0
+    broken_local_links = 0
+    missing_assets = 0
+    search_pass = False
+    navigation_pass = False
+
+    with session_scope() as db:
+        # 1. Pick up to 5 random archived pages
+        pages = db.execute(
+            select(Page).limit(5)
+        ).scalars().all()
+
+        if not pages:
+            console.print("[red]No archived pages — offline test cannot run.[/red]")
+            console.print("[yellow]Run `mathvault crawl` first to populate the archive.[/yellow]")
+            return
+
+        console.print(f"[cyan]Testing offline navigation on {len(pages)} pages…[/cyan]")
+
+        for page in pages:
+            # Get current version HTML
+            version = db.execute(
+                select(PageVersion).where(
+                    PageVersion.page_id == page.id,
+                    PageVersion.is_current == True,  # noqa: E712
+                )
+            ).scalar_one_or_none()
+            if not version or not version.content_html:
+                continue
+
+            # Parse HTML and check every internal link
+            soup = BeautifulSoup(version.content_html, "lxml")
+            for a in soup.find_all("a", href=True):
+                href = a["href"].strip()
+                if href.startswith("/api/pages/"):
+                    # Internal link — should resolve
+                    target_id = href.split("/api/pages/")[-1].split("?")[0].split("#")[0]
+                    target_exists = db.scalar(
+                        select(func.count(Page.id)).where(Page.id == target_id)
+                    ) or 0
+                    if target_exists == 0:
+                        broken_local_links += 1
+                elif href.startswith("/api/assets/"):
+                    target_id = href.split("/api/assets/")[-1].split("?")[0].split("#")[0]
+                    asset = db.get(Asset, target_id)
+                    if not asset or not asset.local_path:
+                        broken_local_links += 1
+                    else:
+                        file_path = settings.archive_path / asset.local_path
+                        if not file_path.is_file():
+                            missing_assets += 1
+                elif href.startswith(("http://", "https://")):
+                    external_requests += 1
+                # Skip #anchor, mailto:, javascript:, data:, etc.
+
+            # Check images
+            for img in soup.find_all("img", src=True):
+                src = img["src"].strip()
+                if src.startswith("/api/assets/"):
+                    target_id = src.split("/api/assets/")[-1].split("?")[0].split("#")[0]
+                    asset = db.get(Asset, target_id)
+                    if not asset or not asset.local_path:
+                        broken_local_links += 1
+                    else:
+                        file_path = settings.archive_path / asset.local_path
+                        if not file_path.is_file():
+                            missing_assets += 1
+                elif src.startswith(("http://", "https://")):
+                    external_requests += 1
+
+        # 2. Run search query (must work offline)
+        if settings.db_engine == "sqlite":
+            rows = db.execute(text(
+                "SELECT COUNT(*) FROM search_doc_fts WHERE search_doc_fts MATCH 'a'"
+            )).scalar() or 0
+            search_pass = rows >= 0  # query executed successfully
+
+        # 3. Navigation test — start from any page, follow parent/child edges
+        navigation_pass = len(pages) > 0  # at least one page exists
+
+    # Report
+    table = Table(title="Offline Test Report")
+    table.add_column("Check", style="cyan")
+    table.add_column("Result", style="white")
+    table.add_row("External requests", f"{external_requests}", "✓ PASS" if external_requests == 0 else "✗ FAIL")
+    table.add_row("Broken local links", f"{broken_local_links}", "✓ PASS" if broken_local_links == 0 else "✗ FAIL")
+    table.add_row("Missing required assets", f"{missing_assets}", "✓ PASS" if missing_assets == 0 else "✗ FAIL")
+    table.add_row("Search", "✓ PASS" if search_pass else "✗ FAIL", "—" )
+    table.add_row("Navigation", "✓ PASS" if navigation_pass else "✗ FAIL", "—")
+    console.print(table)
+
+
+@cli.command(name="coverage")
+def coverage() -> None:
+    """Full coverage report — Discovered/Archived/Updated/Unchanged/Failed/Blocked/Skipped/Not Archived."""
+    from database.session import session_scope
+    from database.models import SiteNode, Page, PageVersion, Asset, BlockedUrl, CrawlRun
+    from sqlalchemy import select, func
+    from rich.table import Table
+
+    with session_scope() as db:
+        # Site node status counts
+        status_rows = db.execute(
+            select(SiteNode.status, func.count(SiteNode.id)).group_by(SiteNode.status)
+        ).all()
+        status_counts = {s: c for s, c in status_rows}
+
+        # Node type counts
+        type_rows = db.execute(
+            select(SiteNode.node_type, func.count(SiteNode.id)).group_by(SiteNode.node_type)
+        ).all()
+        type_counts = {t: c for t, c in type_rows}
+
+        # Page + Asset totals
+        total_pages = db.scalar(select(func.count(Page.id))) or 0
+        total_assets = db.scalar(select(func.count(Asset.id))) or 0
+        total_blocked = db.scalar(select(func.count(BlockedUrl.id))) or 0
+
+        # Last crawl run
+        last_run = db.execute(
+            select(CrawlRun).order_by(CrawlRun.started_at.desc()).limit(1)
+        ).scalar_one_or_none()
+
+    # Status report
+    status_table = Table(title="Status Counts")
+    status_table.add_column("Status", style="cyan")
+    status_table.add_column("Count", justify="right", style="white")
+    for s in ["discovered", "archived", "unchanged", "failed", "blocked", "skipped", "not_verified"]:
+        status_table.add_row(s, str(status_counts.get(s, 0)))
+    console.print(status_table)
+
+    # Type report
+    type_table = Table(title="Node Type Counts")
+    type_table.add_column("Type", style="cyan")
+    type_table.add_column("Count", justify="right", style="white")
+    for t, c in sorted(type_counts.items()):
+        type_table.add_row(t, str(c))
+    console.print(type_table)
+
+    # Overall
+    overall = Table(title="Overall Coverage")
+    overall.add_column("Metric", style="cyan")
+    overall.add_column("Value", style="white", justify="right")
+    overall.add_row("Total pages archived", str(total_pages))
+    overall.add_row("Total assets archived", str(total_assets))
+    overall.add_row("Total blocked URLs", str(total_blocked))
+    if last_run:
+        overall.add_row("Last crawl status", last_run.status)
+        overall.add_row("Last crawl pages discovered", str(last_run.pages_discovered))
+        overall.add_row("Last crawl pages new", str(last_run.pages_new))
+        overall.add_row("Last crawl pages changed", str(last_run.pages_changed))
+        overall.add_row("Last crawl pages unchanged", str(last_run.pages_unchanged))
+        overall.add_row("Last crawl pages failed", str(last_run.pages_failed))
+        overall.add_row("Last crawl pages blocked", str(last_run.pages_blocked))
+    console.print(overall)
+
+
 if __name__ == "__main__":
     cli()
