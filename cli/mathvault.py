@@ -379,10 +379,15 @@ def _run_crawl(trigger: str, dry_run: bool) -> None:
     table.add_row("Changed", str(stats.pages_changed))
     table.add_row("Unchanged", str(stats.pages_unchanged))
     table.add_row("Failed", str(stats.pages_failed))
+    table.add_row("Blocked", str(stats.pages_blocked))
     table.add_row("Bytes downloaded", f"{stats.bytes_downloaded:,}")
     if stats.finished_at and stats.started_at:
         duration = (stats.finished_at - stats.started_at).total_seconds()
         table.add_row("Duration (s)", f"{duration:.1f}")
+    if stats.pages_blocked > 0:
+        console.print()
+        console.print("[yellow]Tip: Run `mathvault retry-blocked` to retry blocked URLs.[/yellow]")
+        console.print("[yellow]For CAPTCHAs, set browser.headless: false in source.yaml.[/yellow]")
     console.print(table)
 
 
