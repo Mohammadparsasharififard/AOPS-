@@ -19,6 +19,7 @@ import subprocess
 import sys
 import tarfile
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -421,6 +422,167 @@ def _dry_run_crawl() -> None:
         # Note: in dry-run, we don't fetch — so we can't discover further links
         # beyond the start URLs. To simulate full discovery, use `mathvault crawl`.
     click.echo(f"\n[green]Total: {seen} URL(s) would be fetched[/green]")
+
+
+@cli.command(name="retry-blocked")
+@click.option("--reason", default=None, help="Only retry URLs blocked with this reason (e.g. cloudflare_challenge, challenge_required)")
+@click.option("--limit", default=20, help="Max URLs to retry per run")
+def retry_blocked(reason: Optional[str], limit: int) -> None:
+    """Retry fetching URLs that were previously blocked.
+
+    Useful workflow:
+    1. Run `mathvault crawl` — some URLs get blocked (e.g. CAPTCHA on IMO page)
+    2. Set `browser.headless: false` in source.yaml
+    3. Run `mathvault retry-blocked` — browser opens visibly
+    4. Manually solve any CAPTCHAs that appear
+    5. The cf_clearance cookie is saved to data/browser_session/
+    6. Set `browser.headless: true` again
+    7. Subsequent `mathvault crawl` runs use the saved cookie (no CAPTCHA)
+
+    The system NEVER solves CAPTCHAs programmatically. This command just
+    re-runs the fetcher against blocked URLs — if a CAPTCHA appears, the
+    user must solve it manually (in headful mode).
+    """
+    from database.session import session_scope
+    from database.models import BlockedUrl, Page
+    from sqlalchemy import select
+    from pathlib import Path
+    from crawler.authorization import load_authorization
+    from crawler.fetcher import build_fetcher, build_allowlist
+    from crawler.storage import Storage
+    from crawler.parser import is_html_content_type, parse_html
+    from rich.progress import Progress, SpinnerColumn, TextColumn
+
+    console.print(f"[cyan]Loading authorization…[/cyan]")
+    auth = load_authorization(Path("sources/aops/source.yaml"))
+    if not auth.is_effectively_authorized():
+        console.print("[red]Source is not authorized — cannot use browser fetcher.[/red]")
+        console.print("[yellow]Falling back to HTTP fetcher (will likely fail again).[/yellow]")
+
+    al = build_allowlist()
+
+    with session_scope() as db:
+        # Find blocked URLs to retry
+        stmt = select(BlockedUrl).order_by(BlockedUrl.last_attempted.desc().nulls_last())
+        if reason:
+            stmt = stmt.where(BlockedUrl.reason == reason)
+        stmt = stmt.limit(limit)
+        blocked = db.execute(stmt).scalars().all()
+
+        if not blocked:
+            console.print("[green]No blocked URLs to retry.[/green]")
+            return
+
+        console.print(f"[cyan]Found {len(blocked)} blocked URL(s) to retry.[/cyan]")
+        for b in blocked:
+            console.print(f"  - {b.url} (reason: {b.reason})")
+
+        # Build fetcher
+        fetcher = build_fetcher(allowlist=al, authorization=auth)
+        console.print(f"[cyan]Using fetcher: {type(fetcher).__name__}[/cyan]")
+        console.print(f"[cyan]Headless: {getattr(fetcher, 'headless', 'N/A')}[/cyan]")
+
+        storage = Storage(db)
+
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            console=console,
+            transient=True,
+        ) as progress:
+            task = progress.add_task(f"Retrying {len(blocked)} blocked URLs…", total=len(blocked))
+            with fetcher:
+                success = 0
+                still_blocked = 0
+                failed = 0
+                for b in blocked:
+                    progress.update(task, description=f"Retrying: {b.url[:60]}")
+                    result = fetcher.get(b.url)
+                    if result is None:
+                        failed += 1
+                        progress.console.print(f"  ✗ {b.url} — out of scope")
+                    elif result.error:
+                        failed += 1
+                        progress.console.print(f"  ✗ {b.url} — {result.error[:80]}")
+                    elif getattr(result, "challenge_required", False):
+                        still_blocked += 1
+                        progress.console.print(f"  ⚠ {b.url} — still requires challenge")
+                        # Update last_attempted
+                        b.last_attempted = datetime.now(timezone.utc)
+                        b.retry_count += 1
+                    elif result.status_code >= 400:
+                        # Re-check block reason
+                        block_reason = storage.detect_block_reason(
+                            result.status_code, result.content, result.content_type
+                        )
+                        if block_reason:
+                            b.last_attempted = datetime.now(timezone.utc)
+                            b.retry_count += 1
+                            b.reason = block_reason[0]
+                            b.detail = block_reason[1]
+                            b.http_status = result.status_code
+                            still_blocked += 1
+                            progress.console.print(f"  ⚠ {b.url} — still blocked: {block_reason[0]}")
+                        else:
+                            failed += 1
+                            progress.console.print(f"  ✗ {b.url} — HTTP {result.status_code}")
+                    else:
+                        # Successfully fetched — store as new page
+                        try:
+                            from crawler.storage import sanitize_html
+                            if is_html_content_type(result.content_type):
+                                html_str = result.content.decode("utf-8", errors="replace")
+                                parsed = parse_html(html_str, base_url=result.final_url)
+                                clean_html = sanitize_html(parsed.html)
+                                page, status = storage.upsert_page(
+                                    url=b.url,
+                                    canonical=result.final_url,
+                                    content_type=result.content_type,
+                                    status_code=result.status_code,
+                                    etag=result.etag,
+                                    last_modified=result.last_modified,
+                                    content_bytes=result.content,
+                                    content_text=parsed.text,
+                                    content_html=clean_html,
+                                    is_complete=True,
+                                )
+                                storage.upsert_search_doc(
+                                    doc_type="page",
+                                    ref_id=page.id,
+                                    title=parsed.title or b.url,
+                                    body=parsed.text[:50000],
+                                    url=b.url,
+                                )
+                                success += 1
+                                progress.console.print(f"  ✓ {b.url} — archived")
+                            else:
+                                # Non-HTML — store as asset
+                                storage.upsert_asset(
+                                    page_id=None,
+                                    asset_url=b.url,
+                                    content_bytes=result.content,
+                                    content_type=result.content_type,
+                                )
+                                success += 1
+                                progress.console.print(f"  ✓ {b.url} — asset archived")
+                            # Remove from blocked table
+                            db.delete(b)
+                        except Exception as e:
+                            failed += 1
+                            progress.console.print(f"  ✗ {b.url} — storage error: {e}")
+                    progress.update(task, advance=1)
+                progress.update(task, completed=True, description="Done")
+
+        db.commit()
+
+    console.print()
+    console.print(f"[green]Successfully archived: {success}[/green]")
+    console.print(f"[yellow]Still blocked: {still_blocked}[/yellow]")
+    console.print(f"[red]Failed: {failed}[/red]")
+    if still_blocked > 0:
+        console.print()
+        console.print("[yellow]Tip: Set browser.headless: false in source.yaml[/yellow]")
+        console.print("[yellow]and re-run this command to solve CAPTCHAs manually.[/yellow]")
 
 
 @cli.command(name="validate-archive")
