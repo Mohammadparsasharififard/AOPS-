@@ -214,6 +214,17 @@ input,select{background:#334155;border:1px solid #475569;color:#e2e8f0;padding:6
   </div>
 
   <div class="card">
+    <h2>💾 Disk & Archive</h2>
+    <button class="btn btn-go" onclick="diskInfo()">Refresh Disk Info</button>
+    <button class="btn btn-go" onclick="apiAction('disk-usage')">Server Disk (df -h)</button>
+    <button class="btn btn-go" onclick="apiAction('archive-size')">Archive Size</button>
+    <button class="btn btn-go" onclick="apiAction('disk-top')">Top Dirs</button>
+    <button class="btn btn-go" onclick="apiAction('db-size')">DB Size</button>
+    <div id="disk-info" style="margin-top:8px"></div>
+    <div id="disk-result"></div>
+  </div>
+
+  <div class="card">
     <h2>Backup</h2>
     <button class="btn btn-ok" onclick="apiAction('backup-now')">Backup Now</button>
     <button class="btn btn-go" onclick="apiAction('backup-list')">List Backups</button>
@@ -242,6 +253,59 @@ async function getStatus() {
     '<div class="row"><span class="label">Name:</span> '+s.name+'</div>' +
     '<div class="row"><span class="label">Host:</span> '+s.host+':'+s.port+'</div>' +
     '<div class="row"><span class="label">Status:</span> '+(s.last_status||'unknown')+'</div>';
+  // Also fetch server status (disk, mem, cpu)
+  const st = await fetchAPI('/servers/'+s.id+'/status');
+  if (st && !st.error && st.online) {
+    const diskPct = st.disk_total_gb ? ((st.disk_used_gb/st.disk_total_gb)*100).toFixed(1) : '?';
+    const memPct = st.mem_total_mb ? ((st.mem_used_mb/st.mem_total_mb)*100).toFixed(1) : '?';
+    const cpuPct = st.load_avg ? st.load_avg.split(' ')[0] : '?';
+    document.getElementById('disk-info').innerHTML = 
+      '<div class="stat" style="color:'+ (diskPct>80?'#dc2626':diskPct>60?'#f59e0b':'#059669') +'">'+diskPct+'%</div>' +
+      '<div class="label">Disk: '+(st.disk_used_gb||0)+' / '+(st.disk_total_gb||0)+' GB</div>' +
+      '<div class="stat" style="color:'+ (memPct>80?'#dc2626':memPct>60?'#f59e0b':'#059669') +'">'+memPct+'%</div>' +
+      '<div class="label">RAM: '+(st.mem_used_mb||0)+' / '+(st.mem_total_mb||0)+' MB</div>' +
+      '<div class="stat">'+cpuPct+'</div>' +
+      '<div class="label">CPU Load ('+(st.cpu_count||'?')+' cores)</div>' +
+      '<div class="label" style="margin-top:4px">Uptime: '+(st.uptime||'?')+'</div>';
+  }
+}
+
+async function diskInfo() {
+  document.getElementById('disk-result').innerHTML = '<pre>Loading...</pre>';
+  const d = await fetchAPI('/servers');
+  if (d.error || !d.length) { document.getElementById('disk-result').innerHTML = 'No server'; return; }
+  const r = await fetchAPI('/servers/'+d[0].id+'/status');
+  if (r && r.online) {
+    const diskPct = r.disk_total_gb ? ((r.disk_used_gb/r.disk_total_gb)*100).toFixed(1) : '?';
+    document.getElementById('disk-result').innerHTML = '<pre>' +
+      '=== Disk Usage ===\\n' +
+      'Used:   '+(r.disk_used_gb||0)+' GB\\n' +
+      'Total:  '+(r.disk_total_gb||0)+' GB\\n' +
+      'Free:   '+((r.disk_total_gb||0)-(r.disk_used_gb||0)).toFixed(1)+' GB\\n' +
+      'Usage:  '+diskPct+'%\\n\\n' +
+      '=== Memory ===\\n' +
+      'Used:   '+(r.mem_used_mb||0)+' MB\\n' +
+      'Total:  '+(r.mem_total_mb||0)+' MB\\n\\n' +
+      '=== CPU ===\\n' +
+      'Cores:  '+(r.cpu_count||0)+'\\n' +
+      'Load:   '+(r.load_avg||'')+'\\n\\n' +
+      '=== Uptime ===\\n'+(r.uptime||'')+'\\n\\n' +
+      '=== Docker ===\\n'+(r.docker_status||'N/A')+'\\n\\n' +
+      '=== MathVault ===\\n' +
+      'Service: '+(r.mathvault_service_status||'N/A')+'\\n' +
+      'Git HEAD: '+(r.mathvault_last_sync||'N/A')+'\\n' +
+      'Network:  '+(r.network_info||'N/A')+'\\n</pre>';
+  } else {
+    document.getElementById('disk-result').innerHTML = '<pre>Server offline or error</pre>';
+  }
+  // Also get archive size via action
+  const ar = await fetchAPI('/servers/'+d[0].id+'/actions/run', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({action_id: 'archive-size', confirm: true})
+  });
+  if (ar.stdout) {
+    document.getElementById('disk-result').innerHTML += '<pre>'+ar.stdout+'</pre>';
+  }
 }
 
 async function testSSH() {
