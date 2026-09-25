@@ -156,33 +156,51 @@ async def delete_server(server_id: str, db: Session = Depends(get_db)) -> dict:
 
 @router.get("/{server_id}/status", dependencies=[Depends(require_session)])
 async def get_status(server_id: str, request: Request, db: Session = Depends(get_db)) -> dict:
+    """Get server status (CPU/mem/disk/uptime/etc)."""
     s = db.get(Server, server_id)
     if not s:
         raise HTTPException(404, "Server not found")
     pw = _get_master_password(request)
-    status = ssh_service.get_server_status(s, pw)
-    # Update last-seen
-    s.last_seen_at = datetime.now(timezone.utc)
-    s.last_status = "online" if status.online else "offline"
-    db.commit()
-    return {
-        "online": status.online,
-        "hostname": status.hostname,
-        "uname": status.uname,
-        "uptime": status.uptime,
-        "load_avg": status.load_avg,
-        "cpu_count": status.cpu_count,
-        "mem_total_mb": status.mem_total_mb,
-        "mem_used_mb": status.mem_used_mb,
-        "disk_total_gb": status.disk_total_gb,
-        "disk_used_gb": status.disk_used_gb,
-        # Extended metrics (Phase 3)
-        "docker_status": status.docker_status,
-        "git_mathvault_head": status.git_mathvault_head,
-        "mathvault_service_status": status.mathvault_service_status,
-        "mathvault_last_sync": status.mathvault_last_sync,
-        "network_info": status.network_info,
-    }
+    try:
+        status = ssh_service.get_server_status(s, pw)
+        s.last_seen_at = datetime.now(timezone.utc)
+        s.last_status = "online" if status.online else "offline"
+        db.commit()
+        return {
+            "online": status.online,
+            "hostname": status.hostname,
+            "uname": status.uname,
+            "uptime": status.uptime,
+            "load_avg": status.load_avg,
+            "cpu_count": status.cpu_count,
+            "mem_total_mb": status.mem_total_mb,
+            "mem_used_mb": status.mem_used_mb,
+            "disk_total_gb": status.disk_total_gb,
+            "disk_used_gb": status.disk_used_gb,
+            "docker_status": status.docker_status,
+            "git_mathvault_head": status.git_mathvault_head,
+            "mathvault_service_status": status.mathvault_service_status,
+            "mathvault_last_sync": status.mathvault_last_sync,
+            "network_info": status.network_info,
+        }
+    except Exception as e:
+        s.last_seen_at = datetime.now(timezone.utc)
+        s.last_status = "error"
+        db.commit()
+        return {
+            "online": False,
+            "hostname": "",
+            "uname": "",
+            "uptime": "",
+            "load_avg": None,
+            "cpu_count": None,
+            "mem_total_mb": None,
+            "mem_used_mb": None,
+            "disk_total_gb": None,
+            "disk_used_gb": None,
+            "docker_status": None,
+            "error": str(e)[:200],
+        }
 
 
 # --- Server Actions (Phase 5) -----------------------------------------------
@@ -229,13 +247,21 @@ async def run_action(server_id: str, req: ActionRunRequest, request: Request, db
     if action["danger"] and not req.confirm:
         raise HTTPException(400, "This action is marked dangerous — set confirm=true")
     pw = _get_master_password(request)
-    result = ssh_service.run_command(db, s, pw, action["command"], timeout=180)
-    return {
-        "exit_code": result.exit_code,
-        "stdout": result.stdout,
-        "stderr": result.stderr,
-        "duration_seconds": result.duration_seconds,
-    }
+    try:
+        result = ssh_service.run_command(db, s, pw, action["command"], timeout=180)
+        return {
+            "exit_code": result.exit_code,
+            "stdout": result.stdout,
+            "stderr": result.stderr,
+            "duration_seconds": result.duration_seconds,
+        }
+    except Exception as e:
+        return {
+            "exit_code": -1,
+            "stdout": "",
+            "stderr": f"SSH connection failed: {e}",
+            "duration_seconds": 0.0,
+        }
 
 
 # --- Live terminal (Phase 6) ---------------------------------------------
@@ -246,17 +272,12 @@ class TerminalRequest(BaseModel):
 
 @router.post("/{server_id}/terminal", dependencies=[Depends(require_session)])
 async def run_terminal(server_id: str, req: TerminalRequest, request: Request, db: Session = Depends(get_db)) -> dict:
-    """Run a single shell command — the API's "terminal" mode.
-
-    Safety: forbidden patterns (rm -rf, dd, mkfs, drop database, etc.) are
-    refused at this layer. Custom commands require confirmation in the UI.
-    """
+    """Run a single shell command — the API's "terminal" mode."""
     s = db.get(Server, server_id)
     if not s:
         raise HTTPException(404, "Server not found")
     safe, reason = ssh_service.is_command_safe(req.command)
     if not safe:
-        # Record the refused attempt in audit log
         audit = AuditLog(
             action="terminal_refused", server_id=s.id,
             command=req.command[:5000],
@@ -268,13 +289,21 @@ async def run_terminal(server_id: str, req: TerminalRequest, request: Request, d
         db.commit()
         raise HTTPException(403, f"Command refused: {reason}")
     pw = _get_master_password(request)
-    result = ssh_service.run_command(db, s, pw, req.command, timeout=60)
-    return {
-        "exit_code": result.exit_code,
-        "stdout": result.stdout,
-        "stderr": result.stderr,
-        "duration_seconds": result.duration_seconds,
-    }
+    try:
+        result = ssh_service.run_command(db, s, pw, req.command, timeout=60)
+        return {
+            "exit_code": result.exit_code,
+            "stdout": result.stdout,
+            "stderr": result.stderr,
+            "duration_seconds": result.duration_seconds,
+        }
+    except Exception as e:
+        return {
+            "exit_code": -1,
+            "stdout": "",
+            "stderr": f"SSH connection failed: {e}",
+            "duration_seconds": 0.0,
+        }
 
 
 # --- Live logs (Phase 6) -------------------------------------------------
@@ -442,21 +471,20 @@ async def list_blocked_urls_route(
     if not s:
         raise HTTPException(404, "Server not found")
     pw = _get_master_password(request)
-    # Find the deploy path from deployments
     deploy_path = "/opt/mathvault"
     deps = db.execute(select(Deployment).where(Deployment.server_id == server_id)).scalars().all()
     if deps:
         deploy_path = deps[0].deploy_path
-    result = ssh_service.list_blocked_urls(db, s, pw, deploy_path)
-    return {
-        "exit_code": result.exit_code,
-        "output": result.stdout,
-    }
+    try:
+        result = ssh_service.list_blocked_urls(db, s, pw, deploy_path)
+        return {"exit_code": result.exit_code, "output": result.stdout}
+    except Exception as e:
+        return {"exit_code": -1, "output": f"SSH connection failed: {e}"}
 
 
 @router.post("/{server_id}/blocked-urls/retry", dependencies=[Depends(require_session)])
 async def retry_blocked_urls_route(
-    server_id: str, req: Request, request: Request, db: Session = Depends(get_db),
+    server_id: str, request: Request, db: Session = Depends(get_db),
 ) -> dict:
     """Retry all blocked URLs on the remote MathVault instance."""
     s = db.get(Server, server_id)
@@ -469,11 +497,11 @@ async def retry_blocked_urls_route(
         deploy_path = deps[0].deploy_path
     body = await request.json()
     reason = body.get("reason") if body else None
-    result = ssh_service.retry_all_blocked(db, s, pw, reason, deploy_path)
-    return {
-        "exit_code": result.exit_code,
-        "output": result.stdout,
-    }
+    try:
+        result = ssh_service.retry_all_blocked(db, s, pw, reason, deploy_path)
+        return {"exit_code": result.exit_code, "output": result.stdout}
+    except Exception as e:
+        return {"exit_code": -1, "output": f"SSH connection failed: {e}"}
 
 
 @router.post("/{server_id}/blocked-urls/{url:path}/retry", dependencies=[Depends(require_session)])
@@ -489,11 +517,11 @@ async def retry_single_url_route(
     deps = db.execute(select(Deployment).where(Deployment.server_id == server_id)).scalars().all()
     if deps:
         deploy_path = deps[0].deploy_path
-    result = ssh_service.retry_single_url(db, s, pw, url, deploy_path)
-    return {
-        "exit_code": result.exit_code,
-        "output": result.stdout,
-    }
+    try:
+        result = ssh_service.retry_single_url(db, s, pw, url, deploy_path)
+        return {"exit_code": result.exit_code, "output": result.stdout}
+    except Exception as e:
+        return {"exit_code": -1, "output": f"SSH connection failed: {e}"}
 
 
 @router.get("/{server_id}/crawl-stats", dependencies=[Depends(require_session)])
@@ -509,11 +537,11 @@ async def get_crawl_stats_route(
     deps = db.execute(select(Deployment).where(Deployment.server_id == server_id)).scalars().all()
     if deps:
         deploy_path = deps[0].deploy_path
-    result = ssh_service.get_crawl_stats(db, s, pw, deploy_path)
-    return {
-        "exit_code": result.exit_code,
-        "output": result.stdout,
-    }
+    try:
+        result = ssh_service.get_crawl_stats(db, s, pw, deploy_path)
+        return {"exit_code": result.exit_code, "output": result.stdout}
+    except Exception as e:
+        return {"exit_code": -1, "output": f"SSH connection failed: {e}"}
 
 
 @router.get("/{server_id}/validate-archive", dependencies=[Depends(require_session)])
@@ -529,11 +557,11 @@ async def validate_archive_route(
     deps = db.execute(select(Deployment).where(Deployment.server_id == server_id)).scalars().all()
     if deps:
         deploy_path = deps[0].deploy_path
-    result = ssh_service.validate_archive_remote(db, s, pw, deploy_path)
-    return {
-        "exit_code": result.exit_code,
-        "output": result.stdout,
-    }
+    try:
+        result = ssh_service.validate_archive_remote(db, s, pw, deploy_path)
+        return {"exit_code": result.exit_code, "output": result.stdout}
+    except Exception as e:
+        return {"exit_code": -1, "output": f"SSH connection failed: {e}"}
 
 
 @router.get("/{server_id}/offline-test", dependencies=[Depends(require_session)])
@@ -549,11 +577,11 @@ async def offline_test_route(
     deps = db.execute(select(Deployment).where(Deployment.server_id == server_id)).scalars().all()
     if deps:
         deploy_path = deps[0].deploy_path
-    result = ssh_service.offline_test_remote(db, s, pw, deploy_path)
-    return {
-        "exit_code": result.exit_code,
-        "output": result.stdout,
-    }
+    try:
+        result = ssh_service.offline_test_remote(db, s, pw, deploy_path)
+        return {"exit_code": result.exit_code, "output": result.stdout}
+    except Exception as e:
+        return {"exit_code": -1, "output": f"SSH connection failed: {e}"}
 
 
 @router.post("/{server_id}/test", dependencies=[Depends(require_session)])
@@ -641,7 +669,7 @@ class RunCommandRequest(BaseModel):
 
 
 @router.post("/{server_id}/run", dependencies=[Depends(require_session)])
-async def run_command(server_id: str, req: RunCommandRequest, request: Request, db: Session = Depends(get_db)) -> dict:
+async def run_command_route(server_id: str, req: RunCommandRequest, request: Request, db: Session = Depends(get_db)) -> dict:
     """Run an arbitrary shell command on the server."""
     s = db.get(Server, server_id)
     if not s:
@@ -656,7 +684,12 @@ async def run_command(server_id: str, req: RunCommandRequest, request: Request, 
             "duration_seconds": result.duration_seconds,
         }
     except Exception as e:
-        raise HTTPException(500, f"Command failed: {e}")
+        return {
+            "exit_code": -1,
+            "stdout": "",
+            "stderr": f"SSH connection failed: {e}",
+            "duration_seconds": 0.0,
+        }
 
 
 # --- Services ---------------------------------------------------------------
