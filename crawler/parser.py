@@ -78,7 +78,40 @@ def parse_html(html: str, base_url: str) -> ParsedPage:
     # Language
     lang = soup.html.get("lang") if soup.html else None
 
-    # Text content — strip script/style/nav/header for cleaner extraction
+    # Pre-extract script/style/stylesheet links BEFORE decomposing them
+    script_links_pre: list[str] = []
+    for script in soup.find_all("script", src=True):
+        src = script["src"].strip()
+        if src:
+            absolute = urljoin(base_url, src)
+            if absolute not in script_links_pre:
+                script_links_pre.append(absolute)
+
+    stylesheet_links_pre: list[str] = []
+    for link in soup.find_all("link", rel=True):
+        rel = link.get("rel", [])
+        if isinstance(rel, list) and "stylesheet" in rel:
+            href = link.get("href", "").strip()
+            if href:
+                absolute = urljoin(base_url, href)
+                if absolute not in stylesheet_links_pre:
+                    stylesheet_links_pre.append(absolute)
+
+    iframe_links_pre: list[str] = []
+    for iframe in soup.find_all("iframe", src=True):
+        src = iframe["src"].strip()
+        if src and not src.startswith("data:"):
+            absolute = urljoin(base_url, src)
+            if absolute not in iframe_links_pre:
+                iframe_links_pre.append(absolute)
+
+    font_links_pre: list[str] = []
+    for link in soup.find_all("link", attrs={"as": "font"}, href=True):
+        absolute = urljoin(base_url, link["href"])
+        if absolute not in font_links_pre:
+            font_links_pre.append(absolute)
+
+    # Text content — strip script/style/noscript for cleaner text extraction
     for tag in soup(["script", "style", "noscript"]):
         tag.decompose()
 
@@ -132,7 +165,8 @@ def parse_html(html: str, base_url: str) -> ParsedPage:
             if full not in assets:
                 assets.append(full)
 
-    # === Phase 3: full navigation discovery ===
+    # === Phase 3: full navigation discovery (uses pre-extracted values
+    #              where appropriate to avoid losing links after decompose) ===
 
     # Navbar links — typically <nav> or <header> <ul> structure
     navbar_links: list[str] = []
@@ -249,33 +283,12 @@ def parse_html(html: str, base_url: str) -> ParsedPage:
         if next_link and prev_link:
             break
 
-    # Stylesheets — <link rel="stylesheet">
-    stylesheet_links: list[str] = []
-    for link in soup.find_all("link", rel=True):
-        rel = link.get("rel", [])
-        if isinstance(rel, list) and "stylesheet" in rel:
-            href = link.get("href", "").strip()
-            if href:
-                stylesheet_links.append(urljoin(base_url, href))
-
-    # Scripts — <script src>
-    script_links: list[str] = []
-    for script in soup.find_all("script", src=True):
-        src = script["src"].strip()
-        if src:
-            script_links.append(urljoin(base_url, src))
-
-    # Iframes — <iframe src>
-    iframe_links: list[str] = []
-    for iframe in soup.find_all("iframe", src=True):
-        src = iframe["src"].strip()
-        if src and not src.startswith("data:"):
-            iframe_links.append(urljoin(base_url, src))
-
-    # Fonts — <link as="font"> or CSS @font-face (rough extraction)
-    font_links: list[str] = []
-    for link in soup.find_all("link", attrs={"as": "font"}, href=True):
-        font_links.append(urljoin(base_url, link["href"]))
+    # Stylesheets / scripts / iframes / fonts — pre-extracted BEFORE
+    # decompose() so we don't lose them
+    stylesheet_links = stylesheet_links_pre
+    script_links = script_links_pre
+    iframe_links = iframe_links_pre
+    font_links = font_links_pre
 
     return ParsedPage(
         title=title,
