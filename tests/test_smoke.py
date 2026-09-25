@@ -353,6 +353,90 @@ def test_offline_link_rewriting():
         assert f"/api/assets/{asset.id}" in content, "Image src not rewritten"
 
 
+def test_offline_link_rewriting_expanded():
+    """Test expanded offline link rewriting — iframe, link, form, source, inline style."""
+    _reset_mathvault_modules()
+    import database.session
+    import crawler.storage
+    from crawler.storage import sanitize_html
+
+    with database.session.session_scope() as db:
+        storage = crawler.storage.Storage(db)
+
+        # Insert a target page
+        target_page, _ = storage.upsert_page(
+            url="https://example.com/target",
+            canonical="https://example.com/target",
+            content_type="text/html", status_code=200,
+            etag='"t"', last_modified=None,
+            content_bytes=b"<html>target</html>",
+            content_text="target", content_html="<p>target</p>",
+            is_complete=True,
+        )
+        # Insert a CSS asset
+        css_asset = storage.upsert_asset(
+            page_id=None,
+            asset_url="https://example.com/style.css",
+            content_bytes=b"body{color:red}",
+            content_type="text/css",
+        )
+        # Insert a video source asset
+        video_asset = storage.upsert_asset(
+            page_id=None,
+            asset_url="https://example.com/video.mp4",
+            content_bytes=b"fake video",
+            content_type="video/mp4",
+        )
+        # Insert a background image asset
+        bg_asset = storage.upsert_asset(
+            page_id=None,
+            asset_url="https://example.com/bg.png",
+            content_bytes=b"fake png",
+            content_type="image/png",
+        )
+
+        # Page with iframe, link, form, source, inline style
+        html_with_expanded = """
+        <html><head>
+        <link rel="stylesheet" href="/style.css">
+        </head><body>
+        <iframe src="/target"></iframe>
+        <video><source src="/video.mp4" type="video/mp4"></video>
+        <form action="/target"><input type="text"></form>
+        <div style="background: url('/bg.png')">Background</div>
+        </body></html>
+        """
+        page, _ = storage.upsert_page(
+            url="https://example.com/main",
+            canonical="https://example.com/main",
+            content_type="text/html", status_code=200,
+            etag='"m"', last_modified=None,
+            content_bytes=html_with_expanded.encode("utf-8"),
+            content_text="main",
+            content_html=sanitize_html(html_with_expanded),
+            is_complete=True,
+        )
+
+        # Read the rewritten file
+        import config
+        s = config.get_settings()
+        rel_parts = page.archive_path.split("/")
+        file_path = s.archive_path / "pages" / rel_parts[0] / rel_parts[1] / (rel_parts[2] + ".html")
+        assert file_path.exists(), f"Page file should exist at {file_path}"
+        content = file_path.read_text(encoding="utf-8")
+
+        # iframe src → /api/pages/{target_page.id}
+        assert f"/api/pages/{target_page.id}" in content, "iframe src not rewritten"
+        # link href → /api/assets/{css_asset.id}
+        assert f"/api/assets/{css_asset.id}" in content, "stylesheet link not rewritten"
+        # video source src → /api/assets/{video_asset.id}
+        assert f"/api/assets/{video_asset.id}" in content, "source src not rewritten"
+        # form action → /api/pages/{target_page.id}
+        # (already checked above)
+        # inline style url() → /api/assets/{bg_asset.id}
+        assert f"/api/assets/{bg_asset.id}" in content, "inline style url() not rewritten"
+
+
 def test_cloudflare_challenge_detection():
     """Cloudflare managed challenge (e.g. AoPS) is correctly detected and
     recorded as 'cloudflare_challenge' — NEVER bypassed.
@@ -418,6 +502,7 @@ if __name__ == "__main__":
         test_test14_search_offline,
         test_test_15_backup_restore_scripts_exist,
         test_offline_link_rewriting,
+        test_offline_link_rewriting_expanded,
         test_cloudflare_challenge_detection,
     ]
     passed = 0

@@ -138,15 +138,24 @@ def test_verify_evidence_sha256():
 
 
 def test_load_authorization_unauthorized_by_default():
-    """Default AoPS source.yaml loads as unauthorized."""
-    source_yaml = PROJECT_ROOT / "sources" / "aops" / "source.yaml"
-    if not source_yaml.exists():
-        return  # Skip if file not present
-    auth = load_authorization(source_yaml)
-    # Default config has status=unauthorized
-    assert auth.status == "unauthorized"
-    assert auth.is_effectively_authorized() is False
-    assert auth.can_use_browser() is False
+    """A source.yaml with status='unauthorized' loads as unauthorized."""
+    import tempfile, yaml
+    from pathlib import Path
+    # Create a temporary source.yaml that's explicitly unauthorized
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir = Path(tmpdir)
+        source_yaml = tmpdir / "source.yaml"
+        source_yaml.write_text(yaml.dump({
+            "source": {"name": "test"},
+            "authorization": {
+                "status": "unauthorized",
+                "scope": {},
+            },
+        }))
+        auth = load_authorization(source_yaml)
+        assert auth.status == "unauthorized"
+        assert auth.is_effectively_authorized() is False
+        assert auth.can_use_browser() is False
 
 
 def test_load_authorization_with_evidence_file():

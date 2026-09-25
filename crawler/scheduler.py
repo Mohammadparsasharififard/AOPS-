@@ -233,7 +233,11 @@ class CrawlScheduler:
         try:
             from crawler.storage import sanitize_html
 
-            clean_html = sanitize_html(parsed.html)
+            clean_html = sanitize_html(
+                parsed.html,
+                source_canonical=result.final_url,
+                db_session=self.db,
+            )
             page, status = storage.upsert_page(
                 url=url,
                 canonical=result.final_url,
