@@ -23,10 +23,11 @@ from sqlalchemy.orm import Session
 
 from config import get_settings
 from crawler.discovery import Frontier, discover_links
-from crawler.fetcher import AllowList, Fetcher, build_allowlist
+from crawler.fetcher import AllowList, Fetcher, HttpFetcher, FetchResult, build_allowlist, build_fetcher
 from crawler.normalizer import canonicalize_url, is_url_allowed_scheme
 from crawler.parser import is_html_content_type, parse_html
 from crawler.storage import Storage
+from crawler.authorization import Authorization, load_authorization
 from database.models import BlockedUrl, CrawlError, CrawlRun, CrawlRunStatus, Page
 
 logger = logging.getLogger(__name__)
@@ -54,12 +55,14 @@ class CrawlScheduler:
         allowlist: Optional[AllowList] = None,
         dry_run: bool = False,
         trigger: str = "manual",
+        authorization: Optional[Authorization] = None,
     ) -> None:
         self.db = db
         self.settings = get_settings()
         self.allowlist = allowlist or build_allowlist()
         self.dry_run = dry_run
         self.trigger = trigger
+        self.authorization = authorization  # None = unauthorized, use HttpFetcher
         self.stats = CrawlStats()
         self.crawl_run_id: Optional[str] = None
 
@@ -87,7 +90,13 @@ class CrawlScheduler:
             frontier.add(url, depth=0)
 
         try:
-            with Fetcher(allowlist=self.allowlist) as fetcher:
+            # Build fetcher based on authorization scope.
+            # Without authorization (default), this returns HttpFetcher.
+            # With explicit authorization + browser_session_allowed, returns
+            # AuthorizedBrowserFetcher (Playwright + real Chromium).
+            fetcher = build_fetcher(allowlist=self.allowlist,
+                                    authorization=self.authorization)
+            with fetcher:
                 storage = Storage(self.db)
 
                 while not frontier.empty() and self.stats.pages_discovered < self.settings.crawl_max_pages:
@@ -150,6 +159,15 @@ class CrawlScheduler:
         if result.error:
             self.stats.pages_failed += 1
             self._record_error(url, "fetch_error", result.error)
+            return
+        # Challenge required (real CAPTCHA puzzle — requires human, never auto-solved)
+        if getattr(result, "challenge_required", False):
+            storage.record_blocked_url(
+                url=url, reason="challenge_required",
+                detail="Real CAPTCHA puzzle (image/click-X) detected — requires human verification",
+                http_status=result.status_code, crawl_run_id=self.crawl_run_id,
+            )
+            logger.info("Challenge required at %s — recorded as blocked (no bypass)", url)
             return
         if result.status_code == 304 and existing_page:
             self.stats.pages_unchanged += 1
@@ -353,10 +371,17 @@ class CrawlScheduler:
         self.db.commit()
 
 
-def run_sync(trigger: str = "timer", dry_run: bool = False) -> CrawlStats:
-    """Convenience wrapper used by CLI + systemd timer."""
+def run_sync(trigger: str = "timer", dry_run: bool = False,
+             authorization: Optional[Authorization] = None) -> CrawlStats:
+    """Convenience wrapper used by CLI + systemd timer.
+
+    If `authorization` is provided and explicitly authorizes browser use,
+    the scheduler will use AuthorizedBrowserFetcher; otherwise it falls
+    back to HttpFetcher.
+    """
     from database.session import session_scope
 
     with session_scope() as db:
-        scheduler = CrawlScheduler(db=db, dry_run=dry_run, trigger=trigger)
+        scheduler = CrawlScheduler(db=db, dry_run=dry_run, trigger=trigger,
+                                   authorization=authorization)
         return scheduler.run()

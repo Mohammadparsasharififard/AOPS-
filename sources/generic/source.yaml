@@ -1,0 +1,60 @@
+# Source: generic
+# -----------------------------------------------------------------------------
+# The default source — works for any allowlisted HTTP source that does NOT
+# require browser-based challenge verification.
+#
+# This is the SAFE DEFAULT. It does NOT enable browser automation, does NOT
+# authorize Cloudflare challenge solving, and does NOT make any assumption
+# about the source's permission policy.
+#
+# Use this for sources where:
+#   - Public HTTP GET returns content without challenge
+#   - You respect robots.txt and the source's ToS
+#   - You have no explicit written permission (rely on fair-use / robots)
+# -----------------------------------------------------------------------------
+
+source:
+  name: generic
+  display_name: Generic HTTP source
+  base_url: null  # Set per-deployment in .env (ARCHIVE_ALLOWED_DOMAINS + ARCHIVE_START_URLS)
+
+authorization:
+  # The generic source is NOT authorized. The crawler falls back to:
+  #   - robots.txt respect
+  #   - allowlist enforcement
+  #   - HTTP-only fetch (no browser, no challenge solving)
+  status: unauthorized
+  evidence_file: null
+  evidence_verified: false
+  scope:
+    crawl_public_pages: true   # Generic — respects robots.txt
+    archive_public_content: true
+    browser_session_allowed: false
+    challenge_verification_allowed: false
+    discussion_archive_allowed: false
+    asset_archive_allowed: true
+
+allowed_paths: []  # Inherited from .env (ARCHIVE_ALLOWED_PATH_PREFIXES)
+
+allowed_content_types:
+  - text/html
+  - application/xhtml+xml
+  - application/pdf
+  - image/png
+  - image/jpeg
+  - image/gif
+  - image/svg+xml
+  - text/plain
+
+rate_limit:
+  delay_seconds: 2.0  # Overridden by CRAWL_DELAY_SECONDS in .env
+  concurrency: 1
+  requests_per_minute: 30
+  max_retries: 3
+
+browser:
+  enabled: false
+  headless: true
+  user_agent: null
+  session_persistence: false
+  challenge_handling: pause  # If a challenge appears, pause — never auto-bypass

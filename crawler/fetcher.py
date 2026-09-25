@@ -45,6 +45,53 @@ class FetchResult:
     elapsed_seconds: float
     from_cache: bool = False  # True if server returned 304
     error: Optional[str] = None
+    fetcher: str = "http"  # http | browser | none
+    challenge_required: bool = False  # True if a real CAPTCHA appeared (pause-and-wait)
+
+
+class Fetcher:
+    """Abstract base for fetchers.
+
+    Implementations:
+    - HttpFetcher (default) — uses httpx; blocked by Cloudflare challenge
+    - AuthorizedBrowserFetcher — uses Playwright; requires explicit
+      authorization with browser_session_allowed = true
+
+    The crawler always uses the most-permissive fetcher that the source's
+    authorization scope allows. If authorization is missing or scope
+    doesn't include browser_session_allowed, falls back to HttpFetcher.
+    """
+
+    def fetch(self, url: str, etag: Optional[str] = None,
+              last_modified: Optional[str] = None) -> Optional[FetchResult]:
+        raise NotImplementedError
+
+    def is_url_in_scope(self, url: str) -> bool:
+        raise NotImplementedError
+
+    def close(self) -> None:
+        pass
+
+    def __enter__(self) -> "Fetcher":
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+        self.close()
+
+
+class HttpFetcher(Fetcher):
+    """HTTP-only fetcher — uses httpx. Does NOT use a real browser.
+
+    If a Cloudflare challenge is encountered, the result is returned with
+    challenge_required = True (but content is still the challenge HTML,
+    which will be detected by Storage.detect_block_reason as
+    'cloudflare_challenge' and recorded as BLOCKED).
+
+    This fetcher is the SAFE DEFAULT. It does not bypass any access control.
+    """
+
+    # ... continued below ...
+
 
 
 @dataclass
@@ -74,6 +121,41 @@ def build_allowlist() -> AllowList:
         domains=s.allowed_domains,
         path_prefixes=s.allowed_path_prefixes,
     )
+
+
+def build_fetcher(allowlist: Optional[AllowList] = None,
+                  authorization: Optional["Authorization"] = None,
+                  config_overrides: Optional[dict] = None) -> Fetcher:
+    """Factory: returns the most-permissive fetcher the authorization allows.
+
+    - If authorization is None or doesn't allow browser → returns HttpFetcher
+    - If authorization explicitly allows browser → returns AuthorizedBrowserFetcher
+
+    The user MUST opt-in to browser usage via source.yaml scope flags.
+    There is NO automatic escalation.
+    """
+    overrides = config_overrides or {}
+    al = allowlist or build_allowlist()
+
+    if authorization and authorization.can_use_browser():
+        try:
+            from crawler.authorized_browser_fetcher import AuthorizedBrowserFetcher
+            return AuthorizedBrowserFetcher(
+                allowlist=al,
+                authorization=authorization,
+                headless=overrides.get("headless", True),
+                delay_seconds=overrides.get("delay_seconds", 5.0),
+                max_retries=overrides.get("max_retries", 3),
+                timeout_seconds=overrides.get("timeout_seconds", 30),
+                session_timeout_minutes=overrides.get("session_timeout_minutes", 60),
+            )
+        except (PermissionError, RuntimeError) as e:
+            logger.warning("Falling back to HttpFetcher: %s", e)
+        except ImportError as e:
+            logger.warning("Playwright not installed — falling back to HttpFetcher: %s", e)
+
+    # Fall back to HTTP-only mode
+    return HttpFetcher(allowlist=al)
 
 
 class RobotsChecker:
@@ -113,8 +195,12 @@ class RobotsChecker:
         return None
 
 
-class Fetcher:
-    """Polite HTTP fetcher with ETag support and retry."""
+class HttpFetcher(Fetcher):
+    """Polite HTTP fetcher with ETag support and retry.
+
+    This is the concrete implementation used when no browser-based
+    authorization is available.
+    """
 
     def __init__(
         self,

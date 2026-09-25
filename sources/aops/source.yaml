@@ -1,0 +1,146 @@
+# Source: AoPS (Art of Problem Solving)
+# =============================================================================
+# IMPORTANT: This file is a TEMPLATE. By default, AoPS is configured as
+# UNAUTHORIZED. The crawler will refuse to use any browser-based fetcher
+# for AoPS until the user provides:
+#
+#   1. An explicit evidence file (PDF / scan / signed text) proving that
+#      AoPS has granted permission for automated archival.
+#   2. The evidence file's SHA-256 hash recorded below in `evidence_sha256`.
+#   3. The explicit scope flags below set to `true` (they are all `false`
+#      by default — the user must opt-in to EACH scope item individually).
+#
+# Without these, the crawler uses the generic HTTP fetcher for AoPS — which
+# will be blocked by Cloudflare (HTTP 403 + managed challenge). The blocked
+# URLs will be recorded in the `blocked_url` table with reason
+# `cloudflare_challenge` and the crawl continues.
+#
+# =============================================================================
+# WHAT THE AUTHORIZATION DOES NOT GRANT
+# =============================================================================
+#
+# Even with an evidence file:
+#   - ❌ CAPTCHA-solving services (2captcha, anti-captcha) — NEVER used
+#   - ❌ Stolen cf_clearance cookies from other sessions — NEVER used
+#   - ❌ Third-party challenge-bypass libraries — NEVER used
+#   - ❌ Credential sharing — NEVER used
+#   - ❌ User-agent spoofing to look like a real browser — NEVER used
+#
+# What the authorization MAY grant (only if scope flags are explicitly true):
+#   - ✅ Use a REAL browser (Playwright + headless Chromium) to load pages
+#   - ✅ Let Cloudflare's JS challenge run naturally (the same way it runs
+#        when a human opens the page in Chrome) — this is NOT a bypass
+#   - ✅ Persist the resulting cf_clearance cookie in the SAME browser
+#        session only — never share, never export, never commit
+#   - ✅ If a real CAPTCHA (image puzzle) appears, PAUSE and wait for
+#        human verification — never solve programmatically
+#
+# =============================================================================
+# HOW TO USE
+# =============================================================================
+#
+# 1. Place your evidence file at: sources/aops/evidence/authorization.pdf
+#    (or .txt / .png — any format)
+# 2. Compute its SHA-256:
+#       shasum -a 256 sources/aops/evidence/authorization.pdf
+# 3. Edit this file:
+#       authorization.status: authorized
+#       authorization.evidence_file: sources/aops/evidence/authorization.pdf
+#       authorization.evidence_sha256: <hash from step 2>
+#       authorization.evidence_verified: true
+#       authorization.scope.crawl_public_pages: true
+#       authorization.scope.archive_public_content: true
+#       authorization.scope.browser_session_allowed: true  # ← critical
+#       authorization.scope.challenge_verification_allowed: true  # ← critical
+#       authorization.scope.discussion_archive_allowed: <true|false>
+#       authorization.scope.asset_archive_allowed: <true|false>
+# 4. Set the expiration date.
+# 5. Set the contact at AoPS who granted permission.
+# =============================================================================
+
+source:
+  name: aops
+  display_name: Art of Problem Solving
+  base_url: https://artofproblemsolving.com
+
+authorization:
+  # DEFAULT: unauthorized. The crawler refuses to use the browser fetcher
+  # for AoPS until this is changed.
+  status: unauthorized  # unauthorized | authorized | pending | expired
+  evidence_file: null  # Path to the authorization document
+  evidence_sha256: null  # SHA-256 of the evidence file (for verification)
+  evidence_verified: false  # Set true ONLY after manual verification
+  verified_at: null  # ISO datetime of verification
+  verified_by: null  # Name of person who verified
+
+  # CRITICAL: each scope flag must be EXPLICITLY set to true. There is no
+  # "all of the above" shortcut.
+  scope:
+    crawl_public_pages: false  # Allow crawling publicly visible pages
+    archive_public_content: false  # Allow archiving that content
+    browser_session_allowed: false  # Allow using a real browser
+    # If browser_session_allowed is false, the rest is moot.
+    challenge_verification_allowed: false  # Allow Cloudflare JS challenge to run naturally in browser
+    # If true, browser lets the JS challenge run (same as a human in Chrome).
+    # If a real CAPTCHA puzzle (image, click-X) appears, system ALWAYS pauses.
+    discussion_archive_allowed: false  # Allow archiving public discussion threads
+    asset_archive_allowed: false  # Allow archiving images, PDFs
+
+  expires_at: null  # ISO datetime — authorization auto-expires after this
+  contact: null  # Name + email of AoPS contact who granted permission
+
+allowed_paths:
+  # Only the public wiki is in scope. Community, classes, store are NOT.
+  - /wiki/index.php/
+
+allowed_content_types:
+  - text/html
+  - application/xhtml+xml
+  - application/pdf
+  - image/png
+  - image/jpeg
+  - image/gif
+  - image/svg+xml
+  - text/plain
+
+# EXTRA-POLITE rate limit for authorized source (still respects ToS).
+rate_limit:
+  delay_seconds: 5.0  # 12 requests/minute max — well below typical limits
+  concurrency: 1
+  requests_per_minute: 12
+  max_retries: 3
+
+browser:
+  enabled: false  # Set true ONLY if authorization.scope.browser_session_allowed = true
+  headless: true  # Set false to allow human verification if a real CAPTCHA appears
+  user_agent: null  # Use real Chromium UA — DO NOT spoof
+  session_persistence: true  # cf_clearance cookie lives in this browser only
+  challenge_handling: pause  # pause | solve  (solve = let JS run naturally; never auto-solve CAPTCHA)
+  session_timeout_minutes: 60  # Re-start browser session after this
+
+# Crawl scope — what to discover (NOT a fixed list; discovered from navigation)
+discovery:
+  start_urls:
+    - https://artofproblemsolving.com/wiki/index.php/Main_Page
+  max_depth: 4  # Don't go deeper than 4 hops from start URLs
+  max_pages_per_run: 500  # Cap to be polite
+  follow_pagination: true
+  follow_breadcrumbs: true
+  follow_problem_navigation: true
+  follow_solution_links: true
+  follow_resource_links: true
+
+# Robots.txt is ALWAYS respected, regardless of authorization
+respect_robots: true
+
+# What is NEVER archived (even with authorization)
+never_archive:
+  - /community/  # AoPS Community forum — most content requires login
+  - /school/  # AoPS classes — paywalled
+  - /store/  # E-commerce
+  - /admin/  # Administrative
+  - /m/  # Mobile app endpoints
+  - /*ajax  # AJAX endpoints
+  - /private/  # Private content
+  - /dashboard/  # User dashboard
+  - /account/  # User account
