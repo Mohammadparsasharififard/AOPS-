@@ -176,6 +176,23 @@ class AuthorizedBrowserFetcher(Fetcher):
             return any(path.startswith(p) for p in source_paths)
         return True
 
+    def get(self, url: str, etag: Optional[str] = None,
+            last_modified: Optional[str] = None) -> Optional[FetchResult]:
+        """Alias for fetch() — scheduler calls .get() not .fetch().
+
+        Browser fetcher doesn't send If-None-Match / If-Modified-Since
+        (browsers don't expose those headers easily). It always fetches
+        the full page; the caller can check content_hash to detect
+        unchanged content.
+        """
+        return self.fetch(url)
+
+    def head(self, url: str) -> Optional[FetchResult]:
+        """HEAD not supported by browser fetcher — returns None."""
+        # Browser fetcher always does a GET. If the caller wants HEAD-only
+        # (e.g., for change detection), they should use HttpFetcher instead.
+        return None
+
     def fetch(self, url: str, etag: Optional[str] = None,
               last_modified: Optional[str] = None) -> Optional[FetchResult]:
         """Fetch a URL via the browser.
@@ -211,12 +228,62 @@ class AuthorizedBrowserFetcher(Fetcher):
                         fetcher="browser", error="No response from page.goto",
                     )
 
-                # Wait briefly for any JS challenge to run naturally
-                # (this is what a real browser does — NOT a bypass)
+                # Wait for any Cloudflare JS challenge to complete.
+                # The challenge runs naturally in the browser (same as a
+                # human opening Chrome) — NOT a bypass.
+                # We use a few strategies:
+                # 1. Wait 2 seconds for initial JS to run
+                # 2. Wait for networkidle (no requests for 500ms)
+                # 3. If still on challenge page, wait up to 10 more seconds
+                # 4. Re-check: if the title is still "Just a moment...",
+                #    the challenge isn't done — return as blocked
+                import time
                 time.sleep(2)
+                try:
+                    page.wait_for_load_state("networkidle", timeout=10000)
+                except Exception:
+                    pass  # networkidle might not fire on all pages
 
-                # Check if a real CAPTCHA puzzle appeared
+                # Re-check the URL — if Cloudflare redirected us through
+                # a challenge, the final URL would have __cf_chl_* params
+                final_url = page.url
+                if "__cf_chl_" in final_url:
+                    # Still on challenge page
+                    return FetchResult(
+                        url=url, final_url=final_url, status_code=response.status,
+                        content=b"<html><body>Cloudflare challenge in progress</body></html>",
+                        content_type="text/html",
+                        etag=response.headers.get("etag"),
+                        last_modified=response.headers.get("last-modified"),
+                        content_hash="challenge_in_progress",
+                        elapsed_seconds=0.0,
+                        fetcher="browser",
+                        challenge_required=True,
+                    )
+
+                # Get the final content (after JS has run)
                 html = page.content()
+                # Sanity-check: if the page STILL shows "Just a moment...",
+                # Cloudflare's JS challenge didn't complete. Don't store.
+                if "just a moment" in html.lower()[:2000] and "_cf_chl_opt" in html.lower():
+                    logger.warning(
+                        "Cloudflare JS challenge still in progress at %s — "
+                        "treating as blocked (would need headful mode + human)",
+                        url,
+                    )
+                    return FetchResult(
+                        url=url, final_url=final_url, status_code=response.status,
+                        content=html.encode("utf-8", errors="replace"),
+                        content_type=response.headers.get("content-type", "").split(";")[0] or None,
+                        etag=response.headers.get("etag"),
+                        last_modified=response.headers.get("last-modified"),
+                        content_hash=content_hash(html.encode("utf-8")),
+                        elapsed_seconds=0.0,
+                        fetcher="browser",
+                        challenge_required=True,  # mark for re-check
+                    )
+
+                # Check if a real CAPTCHA puzzle appeared (image, click-X)
                 if self._is_real_captcha(html):
                     logger.warning("Real CAPTCHA detected at %s — pausing for human verification", url)
                     return FetchResult(

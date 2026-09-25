@@ -165,12 +165,20 @@ def load_authorization(source_yaml_path: Path) -> Authorization:
     # Verify
     if auth.status == "authorized":
         if auth.evidence_file and auth.evidence_sha256:
-            ev_path = source_yaml_path.parent / auth.evidence_file
+            ev_path = Path(auth.evidence_file)
+            # Try as-is (relative to CWD) first
+            if not ev_path.is_file():
+                # Try relative to source.yaml's parent
+                ev_path = source_yaml_path.parent / auth.evidence_file
+            if not ev_path.is_file():
+                # Try relative to project root (parent of sources/)
+                ev_path = source_yaml_path.parent.parent.parent / auth.evidence_file
             if verify_evidence_sha256(ev_path, auth.evidence_sha256):
                 logger.info("Evidence file verified: %s", ev_path)
             else:
                 logger.warning(
-                    "Evidence file SHA-256 mismatch — authorization NOT verified"
+                    "Evidence file SHA-256 mismatch — authorization NOT verified "
+                    "(tried: %s)", ev_path
                 )
                 auth.evidence_verified = False
         else:
