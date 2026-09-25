@@ -31,6 +31,9 @@ env/
 # Server Manager — local seed file (contains plaintext SSH passwords)
 server-manager/scripts/servers.local.json
 
+# Authorization evidence files (NEVER commit — may contain personal info)
+sources/*/evidence/
+
 # Database
 *.db
 *.db-journal
